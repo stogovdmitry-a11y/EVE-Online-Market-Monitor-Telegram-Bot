@@ -56,6 +56,7 @@ export interface BotSettings {
   isSimulationMode: boolean;
   eveClientId?: string;
   eveClientSecret?: string;
+  industryNotificationsEnabled?: boolean;
 }
 
 export interface BotLog {

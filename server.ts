@@ -48,6 +48,7 @@ const defaultState: DatabaseState = {
     botUsername: 'EveMarketMonitorBot',
     isBotRunning: false,
     isSimulationMode: true,
+    industryNotificationsEnabled: true,
   },
   characters: [
     {
@@ -247,6 +248,19 @@ async function resolveIndividualIds(ids: number[]) {
             nameCache[String(id)] = data.name;
           }
         }
+      } else if (id < 1000000000000) {
+        // Resolve Character, Corporation, Alliance etc via bulk POST names endpoint individually
+        const res = await fetch('https://esi.evetech.net/latest/universe/names/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([id])
+        });
+        if (res.ok) {
+          const data = await res.json() as { category: string, id: number, name: string }[];
+          if (data && data[0] && data[0].name) {
+            nameCache[String(id)] = data[0].name;
+          }
+        }
       }
     } catch (err) {
       console.error(`Error resolving individual EVE ID ${id}:`, err);
@@ -256,6 +270,8 @@ async function resolveIndividualIds(ids: number[]) {
     if (!nameCache[String(id)]) {
       if (id < 200000) {
         nameCache[String(id)] = `Item ${id}`;
+      } else if (id >= 1000000000000) {
+        nameCache[String(id)] = `Player Structure (${id})`;
       } else {
         nameCache[String(id)] = `Entity ${id}`;
       }
@@ -271,24 +287,14 @@ async function resolveNames(ids: number[]): Promise<{ [id: string]: string }> {
   const unresolved = uniqueIds.filter(id => !nameCache[String(id)]);
   if (unresolved.length === 0) return nameCache;
 
-  // Separate IDs into those suitable for bulk /universe/names/ and others
-  const bulkCandidates = unresolved.filter(id => {
-    const isType = id < 200000;
-    const isSystem = id >= 30000000 && id < 32000000;
-    const isStation = id >= 60000000 && id < 64000000;
-    const isRegion = id >= 10000000 && id < 12000000;
-    return isType || isSystem || isStation || isRegion;
-  });
-
-  const specialIds = unresolved.filter(id => !bulkCandidates.includes(id));
+  // Separate IDs into those suitable for bulk /universe/names/ (all standard EVE IDs below 1 trillion)
+  // and others (like Citadels / player structures > 1,000,000,000,000)
+  const bulkCandidates = unresolved.filter(id => id < 1000000000000);
+  const specialIds = unresolved.filter(id => id >= 1000000000000);
 
   // Map special IDs (like Citadels / player-owned structures) to friendly fallback names
   specialIds.forEach(id => {
-    if (id > 1000000000000) {
-      nameCache[String(id)] = `Player Structure (${id})`;
-    } else {
-      nameCache[String(id)] = `Entity (${id})`;
-    }
+    nameCache[String(id)] = `Player Structure (${id})`;
   });
 
   if (bulkCandidates.length === 0) return nameCache;
@@ -694,14 +700,15 @@ async function performIndustryCheck() {
   }
 
   // Send Completion Notifications to Telegram
-  if (notificationsToSend.length > 0 && telegramToken) {
+  const industryEnabled = dbState.settings.industryNotificationsEnabled !== false;
+  if (industryEnabled && notificationsToSend.length > 0 && telegramToken) {
     addLog('info', `Sending ${notificationsToSend.length} industry completion notifications to Telegram...`, 'bot');
     for (const notif of notificationsToSend) {
       const typeLabel = notif.isCorporation ? '🏢 Корпоративный проект' : '👤 Личный проект';
       const nameLabel = notif.productTypeName || notif.blueprintTypeName;
 
-      const messageText = `🎉 *EVE Industry Monitor: ПРОЕКТ ЗАВЕРШЕН!*\n\n` +
-                          `📦 *Проект:* ${nameLabel}\n` +
+      const messageText = `📦 *${nameLabel}* — ЗАВЕРШЕН!\n\n` +
+                          `🎉 *EVE Industry Monitor*\n` +
                           `⚙️ *Тип:* ${notif.activityName} (${typeLabel})\n` +
                           `👤 *Запустил:* ${notif.installerName}\n` +
                           `✅ *Статус:* Готов к получению!`;
@@ -1090,8 +1097,10 @@ async function processBotMessage(chatId: string, username: string, text: string)
            `📋 *Доступные команды:*\n` +
            `🔹 /start - показать это меню и список всех команд\n` +
            `🔹 /add_character - добавить нового персонажа через EVE SSO\n` +
-           `🔹 /characters - показать список добавленных персонажей и перебитых ордеров\n` +
+           `🔹 /list (или /characters) - показать список персонажей и перебитых ордеров\n` +
            `🔹 /projects - показать активные индустриальные проекты\n` +
+           `🔹 /projects on (или /projects_on) - включить оповещения о проектах\n` +
+           `🔹 /projects off (или /projects_off) - выключить оповещения о проектах\n` +
            `🔹 /delete_character <ID> - удалить персонажа по ID\n` +
            `🔹 /check - принудительно запустить проверку цен и проектов`;
   }
@@ -1110,7 +1119,7 @@ async function processBotMessage(chatId: string, username: string, text: string)
            `Если ты тестируешь в симуляторе, можешь добавить тестового персонажа прямо в веб-интерфейсе!`;
   }
 
-  if (command === '/characters') {
+  if (command === '/characters' || command === '/list') {
     // Filter characters connected to this chat ID (or show all if in simulation/fallback)
     const chatChars = dbState.characters.filter(c => (c as any).chatId === chatId || c.isSimulated);
     
@@ -1146,7 +1155,35 @@ async function processBotMessage(chatId: string, username: string, text: string)
     return responseText;
   }
 
+  if (command === '/projects_on') {
+    dbState.settings.industryNotificationsEnabled = true;
+    saveDB();
+    addLog('info', `Industry notifications enabled by user command /projects_on from chat ${chatId}`, 'bot');
+    return `🔔 *Оповещения по индустриальным проектам включены!*\n\nЯ буду присылать уведомления в этот чат, когда твои проекты будут завершены.`;
+  }
+
+  if (command === '/projects_off') {
+    dbState.settings.industryNotificationsEnabled = false;
+    saveDB();
+    addLog('info', `Industry notifications disabled by user command /projects_off from chat ${chatId}`, 'bot');
+    return `🔕 *Оповещения по индустриальным проектам выключены!*\n\nЯ больше не буду присылать уведомления о завершении проектов. Но ты все еще можешь проверять их вручную командой /projects.`;
+  }
+
   if (command === '/projects') {
+    const subCommand = args[0]?.toLowerCase();
+    if (subCommand === 'on') {
+      dbState.settings.industryNotificationsEnabled = true;
+      saveDB();
+      addLog('info', `Industry notifications enabled by user command /projects on from chat ${chatId}`, 'bot');
+      return `🔔 *Оповещения по индустриальным проектам включены!*\n\nЯ буду присылать уведомления в этот чат, когда твои проекты будут завершены.`;
+    }
+    if (subCommand === 'off') {
+      dbState.settings.industryNotificationsEnabled = false;
+      saveDB();
+      addLog('info', `Industry notifications disabled by user command /projects off from chat ${chatId}`, 'bot');
+      return `🔕 *Оповещения по индустриальным проектам выключены!*\n\nЯ больше не буду присылать уведомления о завершении проектов. Но ты все еще можешь проверять их вручную командой /projects.`;
+    }
+
     // Ensure simulated projects exist in simulation mode
     if (dbState.settings.isSimulationMode && (!dbState.projects || dbState.projects.length === 0)) {
       await performIndustryCheck();
@@ -1396,7 +1433,7 @@ app.get('/api/status', (req, res) => {
 
 // Update Settings
 app.post('/api/settings', (req, res) => {
-  const { telegramToken, intervalMinutes, isSimulationMode, eveClientId, eveClientSecret } = req.body;
+  const { telegramToken, intervalMinutes, isSimulationMode, eveClientId, eveClientSecret, industryNotificationsEnabled } = req.body;
 
   const oldToken = dbState.settings.telegramToken;
   const oldRunning = dbState.settings.isBotRunning;
@@ -1407,6 +1444,7 @@ app.post('/api/settings', (req, res) => {
   
   if (eveClientId !== undefined) dbState.settings.eveClientId = eveClientId.trim();
   if (eveClientSecret !== undefined) dbState.settings.eveClientSecret = eveClientSecret.trim();
+  if (industryNotificationsEnabled !== undefined) dbState.settings.industryNotificationsEnabled = Boolean(industryNotificationsEnabled);
 
   // If a Telegram Token is newly provided or removed, toggle run state
   if (dbState.settings.telegramToken) {

@@ -15,6 +15,7 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
   const [isSim, setIsSim] = useState(settings.isSimulationMode);
   const [clientId, setClientId] = useState(settings.eveClientId || '');
   const [clientSecret, setClientSecret] = useState(settings.eveClientSecret || '');
+  const [industryEnabled, setIndustryEnabled] = useState(settings.industryNotificationsEnabled !== false);
   const [showHelp, setShowHelp] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -24,7 +25,8 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
       intervalMinutes: Number(interval),
       isSimulationMode: isSim,
       eveClientId: clientId,
-      eveClientSecret: clientSecret
+      eveClientSecret: clientSecret,
+      industryNotificationsEnabled: industryEnabled
     });
   };
 
@@ -106,6 +108,25 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
           >
             <span
               className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${isSim ? 'translate-x-5' : 'translate-x-0'}`}
+            />
+          </button>
+        </div>
+
+        {/* Industry Notifications Switch */}
+        <div className="flex items-center justify-between p-3 bg-slate-950/40 rounded-lg border border-slate-800">
+          <div>
+            <label className="text-sm font-medium text-slate-200 block">Оповещения по индустрии</label>
+            <span className="text-xs text-slate-400 block">
+              Отправлять уведомления в Telegram при завершении производственных и научных проектов.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIndustryEnabled(!industryEnabled)}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${industryEnabled ? 'bg-indigo-600' : 'bg-slate-700'}`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${industryEnabled ? 'translate-x-5' : 'translate-x-0'}`}
             />
           </button>
         </div>
