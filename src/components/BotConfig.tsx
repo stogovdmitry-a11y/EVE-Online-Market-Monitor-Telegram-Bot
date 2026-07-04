@@ -77,8 +77,14 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
             <ol className="list-decimal list-inside space-y-1 ml-1 text-slate-300">
               <li>Перейди на <a href="https://developers.eveonline.com" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline font-semibold">EVE Developers Portal</a> и создай приложение.</li>
               <li>Установи Callback URL как: <code className="bg-slate-800 px-1.5 py-0.5 rounded text-emerald-400 font-mono break-all text-[10px] select-all">{typeof window !== 'undefined' ? `${window.location.origin}/api/auth/eve/callback` : 'https://<APP_URL>/api/auth/eve/callback'}</code></li>
-              <li>Добавь область видимости (scope): <code className="text-amber-400 font-mono">esi-markets.read_character_orders.v1</code></li>
-              <li>Скопируй <span className="text-indigo-400 font-semibold">Client ID</span> и <span className="text-indigo-400 font-semibold">Secret Key</span> и вставь их в форму ниже.</li>
+              <li>Добавь следующие три области видимости (scopes):
+                <ul className="list-disc list-inside ml-4 mt-1 space-y-0.5 text-amber-400 font-mono text-[11px]">
+                  <li>esi-markets.read_character_orders.v1</li>
+                  <li>esi-industry.read_character_jobs.v1</li>
+                  <li>esi-industry.read_corporation_jobs.v1</li>
+                </ul>
+              </li>
+              <li className="mt-1.5">Скопируй <span className="text-indigo-400 font-semibold">Client ID</span> и <span className="text-indigo-400 font-semibold">Secret Key</span> и вставь их в форму ниже.</li>
             </ol>
           </div>
         </motion.div>

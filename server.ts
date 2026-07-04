@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import { Character, Order, BotSettings, BotLog, ChatMessage } from './src/types';
+import { Character, Order, BotSettings, BotLog, ChatMessage, IndustryJob } from './src/types';
 
 const app = express();
 app.set('trust proxy', true);
@@ -36,6 +36,7 @@ interface DatabaseState {
     };
   };
   orders: Order[];
+  projects: IndustryJob[];
   logs: BotLog[];
 }
 
@@ -127,7 +128,8 @@ const defaultState: DatabaseState = {
       message: 'System loaded successfully. Simulation mode active with 2 demo characters.',
       type: 'system'
     }
-  ]
+  ],
+  projects: []
 };
 
 // Memory cache of DB state to prevent redundant disk I/O
@@ -145,6 +147,7 @@ function loadDB() {
         characters: parsed.characters || defaultState.characters,
         tokens: parsed.tokens || defaultState.tokens,
         orders: parsed.orders || defaultState.orders,
+        projects: parsed.projects || defaultState.projects || [],
         logs: parsed.logs || defaultState.logs
       };
     } else {
@@ -410,6 +413,329 @@ async function refreshCharacterToken(characterId: string, refreshToken: string, 
   saveDB();
 
   return data.access_token;
+}
+
+// Fetch and check EVE Industry Projects (Jobs)
+async function performIndustryCheck() {
+  addLog('info', 'Industry projects check initiated.', 'market');
+  const { isSimulationMode, telegramToken } = dbState.settings;
+
+  const notificationsToSend: {
+    characterName: string;
+    installerName: string;
+    blueprintTypeName: string;
+    productTypeName?: string;
+    activityName: string;
+    isCorporation: boolean;
+  }[] = [];
+
+  if (isSimulationMode) {
+    // Ensure simulated jobs exist
+    if (!dbState.projects || dbState.projects.length === 0) {
+      const now = Date.now();
+      dbState.projects = [
+        {
+          id: 'job-sim-1',
+          characterId: '95465499',
+          characterName: 'Stogov Dmitry',
+          isCorporation: false,
+          activityId: 1,
+          activityName: 'Производство',
+          blueprintTypeId: 681,
+          blueprintTypeName: 'Apocalypse Blueprint',
+          productTypeId: 640,
+          productTypeName: 'Apocalypse',
+          installerId: 95465499,
+          installerName: 'Stogov Dmitry',
+          status: 'active',
+          startDate: new Date(now - 3600000).toISOString(),
+          endDate: new Date(now + 7200000).toISOString(), // Ends in 2 hours
+          notified: false
+        },
+        {
+          id: 'job-sim-2',
+          characterId: '95465499',
+          characterName: 'Stogov Dmitry',
+          isCorporation: true,
+          activityId: 3,
+          activityName: 'Исследование эффективности времени (TE)',
+          blueprintTypeId: 12006,
+          blueprintTypeName: 'Ishtar Blueprint',
+          installerId: 95465499,
+          installerName: 'Stogov Dmitry',
+          status: 'active',
+          startDate: new Date(now - 7200000).toISOString(),
+          endDate: new Date(now + 120000).toISOString(), // Ends in 2 minutes
+          notified: false
+        },
+        {
+          id: 'job-sim-3',
+          characterId: '91234567',
+          characterName: 'Alt Jita Trader',
+          isCorporation: false,
+          activityId: 5,
+          activityName: 'Копирование',
+          blueprintTypeId: 587,
+          blueprintTypeName: 'Rifter Blueprint',
+          installerId: 91234567,
+          installerName: 'Alt Jita Trader',
+          status: 'active',
+          startDate: new Date(now - 1800000).toISOString(),
+          endDate: new Date(now - 30000).toISOString(), // Completed 30 seconds ago
+          notified: false
+        }
+      ];
+      saveDB();
+    }
+
+    // Update simulated jobs
+    dbState.projects = dbState.projects.map(job => {
+      if (job.status === 'active') {
+        const endMs = new Date(job.endDate).getTime();
+        if (Date.now() >= endMs) {
+          job.status = 'completed';
+          if (!job.notified) {
+            notificationsToSend.push({
+              characterName: job.characterName,
+              installerName: job.installerName,
+              blueprintTypeName: job.blueprintTypeName,
+              productTypeName: job.productTypeName,
+              activityName: job.activityName,
+              isCorporation: job.isCorporation
+            });
+            job.notified = true;
+          }
+        }
+      }
+      return job;
+    });
+    saveDB();
+    addLog('success', 'Industry check complete (Simulation Mode). Simulated jobs updated.', 'market');
+  } else {
+    // REAL INDUSTRY CHECK VIA EVE ONLINE ESI
+    const clientId = dbState.settings.eveClientId || process.env.EVE_CLIENT_ID;
+    const clientSecret = dbState.settings.eveClientSecret || process.env.EVE_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      addLog('error', 'Cannot perform real industry check: EVE Developer Client ID or Client Secret is not set in settings or env.', 'market');
+      return;
+    }
+
+    const realCharacters = dbState.characters.filter(c => !c.isSimulated);
+    if (realCharacters.length === 0) {
+      return;
+    }
+
+    const fetchedJobsMap = new Map<string, IndustryJob>();
+
+    for (const char of realCharacters) {
+      try {
+        const tokenDetails = dbState.tokens[char.id];
+        if (!tokenDetails) continue;
+
+        let accessToken = tokenDetails.access_token;
+        if (Date.now() + 60000 > tokenDetails.expires_at) {
+          accessToken = await refreshCharacterToken(char.id, tokenDetails.refresh_token, clientId, clientSecret);
+        }
+
+        // Fetch corporation info if not cached yet
+        if (!char.corporationId) {
+          const charPublicUrl = `https://esi.evetech.net/latest/characters/${char.id}/?datasource=tranquility`;
+          const charPublicRes = await fetch(charPublicUrl);
+          if (charPublicRes.ok) {
+            const charPublicData = await charPublicRes.json() as { corporation_id: number };
+            if (charPublicData.corporation_id) {
+              char.corporationId = charPublicData.corporation_id;
+              
+              const corpNameRes = await resolveNames([char.corporationId]);
+              char.corporationName = corpNameRes[String(char.corporationId)] || `Corporation ${char.corporationId}`;
+              saveDB();
+            }
+          }
+        }
+
+        // 1. Fetch Personal Industry Jobs
+        const personalJobsUrl = `https://esi.evetech.net/latest/characters/${char.id}/industry/jobs/?datasource=tranquility&include_completed=true`;
+        const personalJobsRes = await fetch(personalJobsUrl, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
+        const activePersonalJobs: any[] = [];
+        if (personalJobsRes.ok) {
+          const jobs = await personalJobsRes.json() as any[];
+          activePersonalJobs.push(...jobs);
+        } else {
+          addLog('error', `Failed to fetch personal jobs for ${char.name}: ${personalJobsRes.statusText}`, 'market');
+        }
+
+        // 2. Fetch Corporation Industry Jobs if corporationId exists
+        const activeCorpJobs: any[] = [];
+        if (char.corporationId) {
+          const corpJobsUrl = `https://esi.evetech.net/latest/corporations/${char.corporationId}/industry/jobs/?datasource=tranquility&include_completed=true`;
+          const corpJobsRes = await fetch(corpJobsUrl, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          });
+          if (corpJobsRes.ok) {
+            const jobs = await corpJobsRes.json() as any[];
+            const myCorpJobs = jobs.filter(job => job.installer_id === Number(char.id));
+            activeCorpJobs.push(...myCorpJobs);
+          } else {
+            addLog('info', `Could not fetch corporation industry jobs for ${char.name}: character may lack corporation roles/permissions.`, 'market');
+          }
+        }
+
+        // Combine and map
+        const allFetchedJobs = [
+          ...activePersonalJobs.map(j => ({ ...j, isCorporation: false })),
+          ...activeCorpJobs.map(j => ({ ...j, isCorporation: true }))
+        ];
+
+        // Resolve blueprint/product type names and installer names
+        const idsToResolve: number[] = [];
+        allFetchedJobs.forEach(j => {
+          idsToResolve.push(j.blueprint_type_id);
+          if (j.product_type_id) idsToResolve.push(j.product_type_id);
+          idsToResolve.push(j.installer_id);
+        });
+
+        await resolveNames(idsToResolve);
+
+        for (const j of allFetchedJobs) {
+          const activityNames: { [id: number]: string } = {
+            1: 'Производство',
+            2: 'Исследование технологий',
+            3: 'Исследование эффективности времени (TE)',
+            4: 'Исследование эффективности материалов (ME)',
+            5: 'Копирование',
+            7: 'Обратный инжиниринг',
+            8: 'Изобретение',
+            9: 'Реакции'
+          };
+
+          const activityName = activityNames[j.activity_id] || `Проект (ID ${j.activity_id})`;
+          const blueprintTypeName = nameCache[String(j.blueprint_type_id)] || `Blueprint ${j.blueprint_type_id}`;
+          const productTypeName = j.product_type_id ? (nameCache[String(j.product_type_id)] || `Product ${j.product_type_id}`) : undefined;
+          const installerName = nameCache[String(j.installer_id)] || `Character ${j.installer_id}`;
+
+          const key = `job-${j.job_id}`;
+          const existingJob = dbState.projects?.find(p => p.id === key);
+          
+          let notified = existingJob?.notified || false;
+          let currentStatus = j.status;
+
+          const endMs = new Date(j.end_date).getTime();
+          if (currentStatus === 'active' && Date.now() >= endMs) {
+            currentStatus = 'completed';
+          }
+
+          if (currentStatus === 'completed' && !notified) {
+            notificationsToSend.push({
+              characterName: char.name,
+              installerName,
+              blueprintTypeName,
+              productTypeName,
+              activityName,
+              isCorporation: j.isCorporation
+            });
+            notified = true;
+          }
+
+          fetchedJobsMap.set(key, {
+            id: key,
+            characterId: char.id,
+            characterName: char.name,
+            isCorporation: j.isCorporation,
+            activityId: j.activity_id,
+            activityName,
+            blueprintTypeId: j.blueprint_type_id,
+            blueprintTypeName,
+            productTypeId: j.product_type_id,
+            productTypeName,
+            installerId: j.installer_id,
+            installerName,
+            status: currentStatus,
+            startDate: j.start_date,
+            endDate: j.end_date,
+            completedDate: j.completed_date,
+            notified
+          });
+        }
+
+      } catch (err) {
+        addLog('error', `Error handling industry check for character ${char.name}: ${err instanceof Error ? err.message : String(err)}`, 'market');
+      }
+    }
+
+    if (!dbState.projects) {
+      dbState.projects = [];
+    }
+
+    const currentProjects = dbState.projects.filter(p => {
+      const charExists = dbState.characters.some(c => c.id === p.characterId);
+      if (!charExists) return false;
+
+      if (p.status === 'active') return true;
+      const finishedTime = p.completedDate ? new Date(p.completedDate).getTime() : new Date(p.endDate).getTime();
+      return Date.now() - finishedTime < 24 * 3600 * 1000; // 24 hours
+    });
+
+    const updatedProjects = currentProjects.map(p => {
+      if (fetchedJobsMap.has(p.id)) {
+        const fresh = fetchedJobsMap.get(p.id)!;
+        fetchedJobsMap.delete(p.id);
+        return fresh;
+      }
+      return p;
+    });
+
+    dbState.projects = [...updatedProjects, ...Array.from(fetchedJobsMap.values())];
+    saveDB();
+    addLog('success', `Real industry check complete. Verified ${dbState.projects.length} jobs.`, 'market');
+  }
+
+  // Send Completion Notifications to Telegram
+  if (notificationsToSend.length > 0 && telegramToken) {
+    addLog('info', `Sending ${notificationsToSend.length} industry completion notifications to Telegram...`, 'bot');
+    for (const notif of notificationsToSend) {
+      const typeLabel = notif.isCorporation ? '🏢 Корпоративный проект' : '👤 Личный проект';
+      const nameLabel = notif.productTypeName || notif.blueprintTypeName;
+
+      const messageText = `🎉 *EVE Industry Monitor: ПРОЕКТ ЗАВЕРШЕН!*\n\n` +
+                          `📦 *Проект:* ${nameLabel}\n` +
+                          `⚙️ *Тип:* ${notif.activityName} (${typeLabel})\n` +
+                          `👤 *Запустил:* ${notif.installerName}\n` +
+                          `✅ *Статус:* Готов к получению!`;
+
+      try {
+        const chatIds = Array.from(new Set(dbState.characters.map(c => (c as any).chatId).filter(Boolean)))
+          .filter(id => /^-?\d+$/.test(id));
+        
+        if (chatIds.length === 0) continue;
+
+        for (const chatId of chatIds) {
+          const sendUrl = `https://api.telegram.org/bot${telegramToken}/sendMessage`;
+          const response = await fetch(sendUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: messageText,
+              parse_mode: 'Markdown'
+            })
+          });
+
+          if (!response.ok) {
+            const errText = await response.text();
+            addLog('error', `Telegram sendMessage failed for chat ${chatId}: ${response.status} (${errText})`, 'bot');
+          } else {
+            addLog('success', `Industry completion alert sent to Telegram chat ${chatId} for: ${nameLabel}`, 'bot');
+          }
+        }
+      } catch (tgErr) {
+        addLog('error', `Failed to deliver Telegram industry notification: ${tgErr instanceof Error ? tgErr.message : String(tgErr)}`, 'bot');
+      }
+    }
+  }
 }
 
 // Check EVE Market Orders engine (Actual + Simulated)
@@ -711,6 +1037,9 @@ async function performMarketCheck() {
       }
     }
   }
+
+  // Run the industry projects check as part of the market check cycle
+  await performIndustryCheck();
 }
 
 // Background scheduler
@@ -755,22 +1084,24 @@ async function processBotMessage(chatId: string, username: string, text: string)
   }
 
   if (command === '/start') {
-    return `👋 *Привет! Я EVE Market Monitor Bot!*\n\n` +
-           `Я помогу тебе следить за твоими ордерами на покупку и продажу в Jita.\n` +
-           `Если кто-то перебьет твою цену, я моментально пришлю тебе оповещение!\n\n` +
+    return `👋 *Привет! Я EVE Market & Industry Monitor Bot!*\n\n` +
+           `Я помогу тебе следить за твоими ордерами в Jita и завершением индустриальных проектов (производство, исследование, копирование).\n` +
+           `Если кто-то перебьет твою цену или проект закончится, я моментально пришлю тебе оповещение!\n\n` +
            `📋 *Доступные команды:*\n` +
            `🔹 /start - показать это меню и список всех команд\n` +
            `🔹 /add_character - добавить нового персонажа через EVE SSO\n` +
-           `🔹 /characters - показать список добавленных персонажей\n` +
+           `🔹 /characters - показать список добавленных персонажей и перебитых ордеров\n` +
+           `🔹 /projects - показать активные индустриальные проекты\n` +
            `🔹 /delete_character <ID> - удалить персонажа по ID\n` +
-           `🔹 /check - принудительно запустить проверку цен`;
+           `🔹 /check - принудительно запустить проверку цен и проектов`;
   }
 
   if (command === '/add_character') {
-    // Generate actual EVE SSO URL
+    // Generate actual EVE SSO URL with both market and industry scopes
     const appUrl = process.env.APP_URL || `http://localhost:3000`;
     const clientId = dbState.settings.eveClientId || process.env.EVE_CLIENT_ID || 'MOCK_CLIENT_ID';
-    const ssoUrl = `https://login.eveonline.com/v2/oauth/authorize/?response_type=code&redirect_uri=${encodeURIComponent(appUrl + '/api/auth/eve/callback')}&client_id=${clientId}&scope=esi-markets.read_character_orders.v1&state=${chatId}`;
+    const scopes = 'esi-markets.read_character_orders.v1 esi-industry.read_character_jobs.v1 esi-industry.read_corporation_jobs.v1';
+    const ssoUrl = `https://login.eveonline.com/v2/oauth/authorize/?response_type=code&redirect_uri=${encodeURIComponent(appUrl + '/api/auth/eve/callback')}&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&state=${chatId}`;
 
     return `👤 *Добавление персонажа:*\n\n` +
            `Чтобы добавить персонажа, тебе нужно авторизовать его через официальный безопасный EVE SSO (Single Sign-On).\n\n` +
@@ -790,8 +1121,9 @@ async function processBotMessage(chatId: string, username: string, text: string)
     let responseText = `👤 *Мои привязанные персонажи:*\n\n`;
     chatChars.forEach((char, index) => {
       const simBadge = char.isSimulated ? ' 🧪 (Демо)' : '';
+      const corpInfo = char.corporationName ? ` | Корпорация: ${char.corporationName}` : '';
       responseText += `${index + 1}. *${char.name}* [ID: \`${char.id}\`]${simBadge}\n` +
-                     `   └ Активных ордеров: ${char.activeOrdersCount} | Статус: ${char.status === 'active' ? '🟢 Активен' : '🔴 Нужен перезапуск'}\n\n`;
+                     `   └ Активных ордеров: ${char.activeOrdersCount}${corpInfo} | Статус: ${char.status === 'active' ? '🟢 Активен' : '🔴 Нужен перезапуск'}\n\n`;
     });
 
     // Also append any currently undercut orders for these characters
@@ -809,6 +1141,96 @@ async function processBotMessage(chatId: string, username: string, text: string)
       });
     } else {
       responseText += `✅ *Все твои ордера лидируют по цене на рынке!*`;
+    }
+
+    return responseText;
+  }
+
+  if (command === '/projects') {
+    // Ensure simulated projects exist in simulation mode
+    if (dbState.settings.isSimulationMode && (!dbState.projects || dbState.projects.length === 0)) {
+      await performIndustryCheck();
+    }
+
+    const chatChars = dbState.characters.filter(c => (c as any).chatId === chatId || c.isSimulated);
+    const charIds = chatChars.map(c => c.id);
+
+    // Get active projects of these characters
+    const activeProjects = (dbState.projects || []).filter(p => charIds.includes(p.characterId) && p.status === 'active');
+
+    if (activeProjects.length === 0) {
+      return `ℹ️ *Активных проектов не найдено!*\n\nУ ваших персонажей нет запущенных проектов (производство, исследование, копирование) на данный момент.`;
+    }
+
+    // Sort/group by project types: Производство, Исследование, Копирование, etc.
+    const groups: { [name: string]: typeof activeProjects } = {};
+    activeProjects.forEach(p => {
+      const gName = p.activityName || 'Другие проекты';
+      if (!groups[gName]) {
+        groups[gName] = [];
+      }
+      groups[gName].push(p);
+    });
+
+    let responseText = `⚙️ *АКТИВНЫЕ ПРОЕКТЫ ДЛЯ ВАШИХ ПЕРСОНАЖЕЙ (${activeProjects.length}):*\n\n`;
+
+    const preferredOrder = [
+      'Производство',
+      'Исследование эффективности материалов (ME)',
+      'Исследование дефицита времени (TE)',
+      'Исследование эффективности времени (TE)',
+      'Исследование технологий',
+      'Копирование',
+      'Изобретение',
+      'Реакции'
+    ];
+
+    const allGroupNames = Object.keys(groups);
+    allGroupNames.sort((a, b) => {
+      const idxA = preferredOrder.findIndex(o => a.includes(o) || o.includes(a));
+      const idxB = preferredOrder.findIndex(o => b.includes(o) || o.includes(b));
+      
+      const valA = idxA === -1 ? 999 : idxA;
+      const valB = idxB === -1 ? 999 : idxB;
+      
+      if (valA !== valB) return valA - valB;
+      return a.localeCompare(b);
+    });
+
+    for (const gName of allGroupNames) {
+      responseText += `📍 *${gName.toUpperCase()}*\n`;
+      groups[gName].forEach(p => {
+        const remainingMs = new Date(p.endDate).getTime() - Date.now();
+        let remainingStr = 'Завершается...';
+        if (remainingMs > 0) {
+          const secs = Math.floor(remainingMs / 1000);
+          const mins = Math.floor(secs / 60);
+          const hours = Math.floor(mins / 60);
+          const days = Math.floor(hours / 24);
+
+          if (days > 0) {
+            remainingStr = `${days}д ${hours % 24}ч ${mins % 60}м`;
+          } else if (hours > 0) {
+            remainingStr = `${hours}ч ${mins % 60}м ${secs % 60}с`;
+          } else {
+            remainingStr = `${mins}м ${secs % 60}с`;
+          }
+        } else {
+          remainingStr = 'Завершен (Готов к получению!)';
+        }
+
+        const endDateObj = new Date(p.endDate);
+        const formatZero = (num: number) => num < 10 ? '0' + num : num;
+        const formattedEndDate = `${formatZero(endDateObj.getDate())}.${formatZero(endDateObj.getMonth() + 1)}.${endDateObj.getFullYear()} ${formatZero(endDateObj.getHours())}:${formatZero(endDateObj.getMinutes())}:${formatZero(endDateObj.getSeconds())}`;
+
+        const isCorpBadge = p.isCorporation ? ' 🏢 [Corp]' : ' 👤 [Personal]';
+        const nameLabel = p.productTypeName ? `${p.productTypeName} (${p.blueprintTypeName})` : p.blueprintTypeName;
+
+        responseText += ` 📦 *${nameLabel}*\n` +
+                       `  ├ Запустил: ${p.installerName}${isCorpBadge}\n` +
+                       `  ├ Осталось: \`${remainingStr}\`\n` +
+                       `  └ Окончание: \`${formattedEndDate}\`\n\n`;
+      });
     }
 
     return responseText;
@@ -862,9 +1284,9 @@ async function processBotMessage(chatId: string, username: string, text: string)
     // Trigger check asynchronously to respond to user fast
     performMarketCheck();
 
-    return `🔍 *Запущена принудительная проверка рыночных ордеров...*\n\n` +
-           `Проверяю цены в регионе Jita на наличие перебитых ордеров. ` +
-           `Если будут найдены перебитые ордера, я пришлю новые алерты моментально!`;
+    return `🔍 *Запущена принудительная проверка ордеров и проектов...*\n\n` +
+           `Проверяю цены в регионе Jita на наличие перебитых ордеров, а также статус завершения ваших индустриальных проектов.\n\n` +
+           `Если будут найдены перебитые ордера или завершенные проекты, я сразу пришлю оповещения!`;
   }
 
   // Fallback / Unknown command
@@ -967,6 +1389,7 @@ app.get('/api/status', (req, res) => {
     settings: dbState.settings,
     characters: dbState.characters,
     orders: dbState.orders,
+    projects: dbState.projects || [],
     logs: dbState.logs
   });
 });
@@ -1016,6 +1439,7 @@ app.post('/api/check', async (req, res) => {
   res.json({
     success: true,
     orders: dbState.orders,
+    projects: dbState.projects || [],
     logs: dbState.logs
   });
 });
@@ -1140,7 +1564,8 @@ app.get('/api/auth/eve/login', (req, res) => {
     return res.status(400).send('EVE SSO Client ID is not configured in settings or environment variables.');
   }
 
-  const ssoUrl = `https://login.eveonline.com/v2/oauth/authorize/?response_type=code&redirect_uri=${encodeURIComponent(appUrl + '/api/auth/eve/callback')}&client_id=${clientId}&scope=esi-markets.read_character_orders.v1&state=${userTelegramChatId}`;
+  const scopes = 'esi-markets.read_character_orders.v1 esi-industry.read_character_jobs.v1 esi-industry.read_corporation_jobs.v1';
+  const ssoUrl = `https://login.eveonline.com/v2/oauth/authorize/?response_type=code&redirect_uri=${encodeURIComponent(appUrl + '/api/auth/eve/callback')}&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&state=${userTelegramChatId}`;
   res.redirect(ssoUrl);
 });
 

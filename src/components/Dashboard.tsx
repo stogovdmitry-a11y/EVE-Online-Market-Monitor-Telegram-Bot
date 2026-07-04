@@ -4,14 +4,16 @@ import { Character, Order, BotSettings, BotLog } from '../types';
 import BotConfig from './BotConfig';
 import CharactersList from './CharactersList';
 import OrdersGrid from './OrdersGrid';
+import IndustryProjects from './IndustryProjects';
 import ChatSimulator from './ChatSimulator';
 import LogTerminal from './LogTerminal';
-import { Bot, ShieldCheck, AlertTriangle, Compass, Clock, Link2, Globe, Sparkles, Database } from 'lucide-react';
+import { Bot, ShieldCheck, AlertTriangle, Compass, Clock, Link2, Globe, Sparkles, Database, Hammer } from 'lucide-react';
 
 export default function Dashboard() {
   const [settings, setSettings] = useState<BotSettings | null>(null);
   const [characters, setCharacters] = useState<Character[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
   const [logs, setLogs] = useState<BotLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isChecking, setIsChecking] = useState(false);
@@ -31,6 +33,7 @@ export default function Dashboard() {
         setSettings(data.settings);
         setCharacters(data.characters || []);
         setOrders(data.orders || []);
+        setProjects(data.projects || []);
         setLogs(data.logs || []);
       }
     } catch (err) {
@@ -123,6 +126,7 @@ export default function Dashboard() {
       if (res.ok) {
         const data = await res.json();
         setOrders(data.orders);
+        setProjects(data.projects || []);
         setLogs(data.logs);
       }
     } catch (err) {
@@ -358,6 +362,15 @@ export default function Dashboard() {
                 onForceCheck={handleForceCheck}
                 isChecking={isChecking}
               />
+            </div>
+
+            {/* Monitored Industry Projects */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-1.5">
+                <Hammer className="w-5 h-5 text-indigo-400" />
+                <h2 className="text-lg font-bold text-slate-100">Индустриальные проекты пилотов</h2>
+              </div>
+              <IndustryProjects projects={projects} />
             </div>
 
             {/* Bottom Dual Grid: Log Panel & Simulated Chat */}

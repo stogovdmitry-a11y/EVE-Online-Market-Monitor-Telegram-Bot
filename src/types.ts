@@ -6,6 +6,29 @@ export interface Character {
   status: 'active' | 'invalid_token' | 'pending';
   registeredAt: string;
   isSimulated?: boolean;
+  chatId?: string;
+  corporationId?: number;
+  corporationName?: string;
+}
+
+export interface IndustryJob {
+  id: string; // job_id
+  characterId: string;
+  characterName: string;
+  isCorporation: boolean;
+  activityId: number;
+  activityName: string;
+  blueprintTypeId: number;
+  blueprintTypeName: string;
+  productTypeId?: number;
+  productTypeName?: string;
+  installerId: number;
+  installerName: string;
+  status: string; // active, completed, etc.
+  startDate: string;
+  endDate: string;
+  completedDate?: string | null;
+  notified?: boolean; // Have we already sent a Telegram notification about completion?
 }
 
 export interface Order {
