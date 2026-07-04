@@ -8,15 +8,27 @@ const app = express();
 app.set('trust proxy', true);
 const PORT = 3000;
 
+let lastKnownAppUrl = process.env.APP_URL ? process.env.APP_URL.replace(/\/$/, '') : '';
+
 function getAppUrl(req: any) {
-  if (process.env.APP_URL) {
-    return process.env.APP_URL.replace(/\/$/, '');
-  }
   let proto = req.protocol;
   if (req.headers['x-forwarded-proto'] === 'https' || req.get('host')?.includes('.run.app')) {
     proto = 'https';
   }
-  return `${proto}://${req.get('host')}`;
+  const host = req.get('host');
+  if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
+    const detectedUrl = `${proto}://${host}`;
+    lastKnownAppUrl = detectedUrl;
+    return detectedUrl;
+  }
+  if (process.env.APP_URL) {
+    const envUrl = process.env.APP_URL.replace(/\/$/, '');
+    if (!lastKnownAppUrl) {
+      lastKnownAppUrl = envUrl;
+    }
+    return envUrl;
+  }
+  return 'http://localhost:3000';
 }
 
 app.use(express.json());
@@ -1107,7 +1119,7 @@ async function processBotMessage(chatId: string, username: string, text: string)
 
   if (command === '/add_character') {
     // Generate actual EVE SSO URL with both market and industry scopes
-    const appUrl = process.env.APP_URL || `http://localhost:3000`;
+    const appUrl = lastKnownAppUrl || process.env.APP_URL || `http://localhost:3000`;
     const clientId = dbState.settings.eveClientId || process.env.EVE_CLIENT_ID || 'MOCK_CLIENT_ID';
     const scopes = 'esi-markets.read_character_orders.v1 esi-industry.read_character_jobs.v1 esi-industry.read_corporation_jobs.v1';
     const ssoUrl = `https://login.eveonline.com/v2/oauth/authorize/?response_type=code&redirect_uri=${encodeURIComponent(appUrl + '/api/auth/eve/callback')}&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&state=${chatId}`;
