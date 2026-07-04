@@ -1,0 +1,6 @@
+{
+  "name": "EVE Market Monitor",
+  "description": "Telegram bot and dashboard for monitoring buy and sell orders in Eve Online.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
