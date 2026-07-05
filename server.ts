@@ -880,6 +880,9 @@ async function performMarketCheck() {
         charOrders.forEach(co => {
           universeIdsToResolve.push(co.type_id);
           universeIdsToResolve.push(co.location_id);
+          if (co.region_id) {
+            universeIdsToResolve.push(co.region_id);
+          }
         });
         await resolveNames(universeIdsToResolve);
 
@@ -890,11 +893,26 @@ async function performMarketCheck() {
           // Keep track of names
           const itemName = nameCache[String(co.type_id)] || `Item ${co.type_id}`;
           const locationName = nameCache[String(co.location_id)] || `Station ${co.location_id}`;
-          const systemName = co.location_id === 60003760 || co.location_id === 60003761 ? 'Jita' : 'The Forge';
+          
+          const regionId = co.region_id || 10000002;
+          const regionName = nameCache[String(regionId)] || 'The Forge';
+          
+          // Determine friendly solar system / location name from station name prefix or region name
+          let systemName = regionName;
+          if (locationName.startsWith('Jita')) {
+            systemName = 'Jita';
+          } else if (locationName.startsWith('Amarr')) {
+            systemName = 'Amarr';
+          } else if (locationName.startsWith('Dodixie')) {
+            systemName = 'Dodixie';
+          } else if (locationName.startsWith('Rens')) {
+            systemName = 'Rens';
+          } else if (locationName.startsWith('Hek')) {
+            systemName = 'Hek';
+          }
+          
           const isBuyOrder = !!co.is_buy_order;
 
-          // We query market orders in Jita's region (The Forge = 10000002) for this specific type ID
-          const regionId = 10000002;
           const marketUrl = `https://esi.evetech.net/latest/markets/${regionId}/orders/?datasource=tranquility&order_type=all&type_id=${co.type_id}`;
           
           let bestPrice = co.price;
