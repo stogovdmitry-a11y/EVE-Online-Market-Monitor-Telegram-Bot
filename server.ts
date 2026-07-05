@@ -1251,7 +1251,12 @@ function startCheckScheduler() {
 // Start Scheduler
 startCheckScheduler();
 
-async function getCharacterSkillsString(char: Character): Promise<string> {
+async function fetchCharacterSkills(char: Character): Promise<{
+  totalSp: number;
+  unallocatedSp: number;
+  skillsList: { name: string; level: number; sp: number }[];
+  error?: string;
+}> {
   const { isSimulationMode } = dbState.settings;
 
   let totalSp = 0;
@@ -1287,12 +1292,12 @@ async function getCharacterSkillsString(char: Character): Promise<string> {
     const clientSecret = dbState.settings.eveClientSecret || process.env.EVE_CLIENT_SECRET;
 
     if (!clientId || !clientSecret) {
-      return `❌ *Ошибка конфигурации EVE Developer Client ID/Secret на сервере!*`;
+      return { totalSp: 0, unallocatedSp: 0, skillsList: [], error: 'Ошибка конфигурации EVE Developer Client ID/Secret на сервере!' };
     }
 
     const tokenDetails = dbState.tokens[char.id];
     if (!tokenDetails) {
-      return `❌ *Токен авторизации для персонажа ${char.name} отсутствует. Переподключите персонажа с помощью /add_character.*`;
+      return { totalSp: 0, unallocatedSp: 0, skillsList: [], error: `Токен авторизации для персонажа ${char.name} отсутствует. Переподключите персонажа с помощью /add_character.` };
     }
 
     try {
@@ -1309,9 +1314,9 @@ async function getCharacterSkillsString(char: Character): Promise<string> {
 
       if (!skillsRes.ok) {
         if (skillsRes.status === 403) {
-          return `❌ *Ошибка доступа (403)!*\n\nПерсонажу *${char.name}* требуются дополнительные права на навыки. Пожалуйста, переподключите его через /add_character.`;
+          return { totalSp: 0, unallocatedSp: 0, skillsList: [], error: `Ошибка доступа (403)! Персонажу *${char.name}* требуются дополнительные права на навыки. Пожалуйста, переподключите его через /add_character.` };
         }
-        return `❌ *Не удалось загрузить навыки с EVE ESI: ${skillsRes.statusText}*`;
+        return { totalSp: 0, unallocatedSp: 0, skillsList: [], error: `Не удалось загрузить навыки с EVE ESI: ${skillsRes.statusText}` };
       }
 
       const skillsData = await skillsRes.json() as { skills: any[]; total_sp: number; unallocated_sp?: number };
@@ -1335,12 +1340,50 @@ async function getCharacterSkillsString(char: Character): Promise<string> {
       });
 
     } catch (err) {
-      return `❌ *Ошибка получения навыков:* ${err instanceof Error ? err.message : String(err)}`;
+      return { totalSp: 0, unallocatedSp: 0, skillsList: [], error: `Ошибка получения навыков: ${err instanceof Error ? err.message : String(err)}` };
     }
   }
 
   // Sort alphabetically
   skillsList.sort((a, b) => a.name.localeCompare(b.name));
+
+  return { totalSp, unallocatedSp, skillsList };
+}
+
+function formatSkillsForEVE(skills: { name: string; level: number }[]): string {
+  const roman = ['I', 'II', 'III', 'IV', 'V'];
+  return skills.map(s => `${s.name} ${roman[s.level - 1] || s.level}`).join('\n');
+}
+
+async function sendTelegramMessage(token: string, chatId: string, text: string) {
+  const sendUrl = `https://api.telegram.org/bot${token}/sendMessage`;
+  try {
+    const res = await fetch(sendUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'Markdown'
+      })
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      addLog('error', `Failed to send Telegram message: ${res.status} (${errText})`, 'bot');
+    }
+  } catch (err) {
+    addLog('error', `Error sending Telegram message: ${err instanceof Error ? err.message : String(err)}`, 'bot');
+  }
+}
+
+async function getCharacterSkillsString(char: Character, chatId?: string, isRealTelegram?: boolean): Promise<string> {
+  const result = await fetchCharacterSkills(char);
+  if (result.error) {
+    return `❌ *${result.error}*`;
+  }
+
+  const { totalSp, unallocatedSp, skillsList } = result;
+  const token = dbState.settings.telegramToken;
 
   const levelEmojis: { [key: number]: string } = {
     5: '🔵',
@@ -1350,36 +1393,90 @@ async function getCharacterSkillsString(char: Character): Promise<string> {
     1: '⚪'
   };
 
-  let output = `🎓 *НАВЫКИ ПИЛОТА: ${char.name.toUpperCase()}*\n\n`;
-  output += `📊 *Всего Skill Points:* \`${totalSp.toLocaleString()}\` SP\n`;
-  if (unallocatedSp > 0) {
-    output += `✨ *Нераспределенные SP:* \`${unallocatedSp.toLocaleString()}\` SP\n`;
+  const lines = skillsList.map(s => {
+    const emoji = levelEmojis[s.level] || '🔘';
+    return `${emoji} *${s.name}* — Уровень ${romanize(s.level)}`;
+  });
+
+  const CHUNK_SIZE = 35;
+  const chunks: string[][] = [];
+  for (let i = 0; i < lines.length; i += CHUNK_SIZE) {
+    chunks.push(lines.slice(i, i + CHUNK_SIZE));
   }
-  output += `\n`;
 
-  output += `📚 *ИЗУЧЕННЫЕ НАВЫКИ (${skillsList.length}):*\n`;
-  if (skillsList.length === 0) {
-    output += `  _Информация о выученных навыках отсутствует._\n`;
-  } else {
-    const lines = skillsList.map(s => {
-      const emoji = levelEmojis[s.level] || '🔘';
-      return `${emoji} *${s.name}* — Уровень ${romanize(s.level)}`;
-    });
-
-    let tempOutput = output;
-    let addedCount = 0;
-    for (const line of lines) {
-      if (tempOutput.length + line.length + 5 > 3800) {
-        tempOutput += `\n... и еще ${lines.length - addedCount} навыков.`;
-        break;
-      }
-      tempOutput += `\n${line}`;
-      addedCount++;
+  if (isRealTelegram && chatId && token) {
+    // Send the first message with summary info
+    let firstMsg = `🎓 *НАВЫКИ ПИЛОТА: ${char.name.toUpperCase()}*\n\n` +
+                   `📊 *Всего Skill Points:* \`${totalSp.toLocaleString()}\` SP\n`;
+    if (unallocatedSp > 0) {
+      firstMsg += `✨ *Нераспределенные SP:* \`${unallocatedSp.toLocaleString()}\` SP\n`;
     }
-    output = tempOutput;
-  }
+    firstMsg += `\n`;
 
-  return output;
+    if (chunks.length === 0) {
+      firstMsg += `📚 *ИЗУЧЕННЫЕ НАВЫКИ:*\n  _Информация о выученных навыках отсутствует._`;
+      await sendTelegramMessage(token, chatId, firstMsg);
+    } else {
+      firstMsg += `📚 *ИЗУЧЕННЫЕ НАВЫКИ (Часть 1/${chunks.length}):*\n` + chunks[0].join('\n');
+      await sendTelegramMessage(token, chatId, firstMsg);
+
+      for (let i = 1; i < chunks.length; i++) {
+        const chunkMsg = `📚 *ИЗУЧЕННЫЕ НАВЫКИ (Часть ${i + 1}/${chunks.length}):*\n` + chunks[i].join('\n');
+        await sendTelegramMessage(token, chatId, chunkMsg);
+      }
+    }
+
+    // Now send the document
+    try {
+      const fileContent = formatSkillsForEVE(skillsList);
+      const formData = new FormData();
+      formData.append('chat_id', chatId);
+      const blob = new Blob([fileContent], { type: 'text/plain' });
+      formData.append('document', blob, `${char.name.replace(/[^a-zA-Z0-9]/g, '_')}_skills.txt`);
+      formData.append('caption', `📋 Файл со списком навыков пилота ${char.name} для импорта в EVE Online.`);
+      
+      const sendDocUrl = `https://api.telegram.org/bot${token}/sendDocument`;
+      const docRes = await fetch(sendDocUrl, {
+        method: 'POST',
+        body: formData
+      });
+      if (docRes.ok) {
+        addLog('success', `Skills document sent to Telegram chat ${chatId} for character: ${char.name}`, 'bot');
+      } else {
+        const errText = await docRes.text();
+        addLog('error', `Failed to send skills document: ${docRes.status} (${errText})`, 'bot');
+      }
+    } catch (docErr) {
+      addLog('error', `Error sending skills document: ${docErr instanceof Error ? docErr.message : String(docErr)}`, 'bot');
+    }
+
+    const appUrl = lastKnownAppUrl || process.env.APP_URL || `http://localhost:3000`;
+    return `✅ *Все навыки успешно отправлены выше!*\n\n` +
+           `📎 Прикреплен текстовый файл со всеми навыками в формате для импорта в игру.\n` +
+           `🔗 [Ссылка на скачивание файла](${appUrl}/api/skills/export/${char.id})`;
+  } else {
+    // Web simulator or fallback
+    let outputText = `🎓 *НАВЫКИ ПИЛОТА: ${char.name.toUpperCase()}*\n\n` +
+                     `📊 *Всего Skill Points:* \`${totalSp.toLocaleString()}\` SP\n`;
+    if (unallocatedSp > 0) {
+      outputText += `✨ *Нераспределенные SP:* \`${unallocatedSp.toLocaleString()}\` SP\n`;
+    }
+    outputText += `\n`;
+
+    const appUrl = lastKnownAppUrl || process.env.APP_URL || `http://localhost:3000`;
+    outputText += `📎 *Полный список навыков доступен для скачивания в формате EVE:* [Скачать .txt файл](${appUrl}/api/skills/export/${char.id})\n\n`;
+
+    if (chunks.length === 0) {
+      outputText += `📚 *ИЗУЧЕННЫЕ НАВЫКИ:*\n  _Информация о выученных навыках отсутствует._`;
+    } else {
+      outputText += `📚 *ИЗУЧЕННЫЕ НАВЫКИ (Часть 1/${chunks.length}):*\n` + chunks[0].join('\n');
+      if (chunks.length > 1) {
+        outputText += `\n\n⚠️ *Остальные навыки (${lines.length - chunks[0].length} шт.) скрыты в веб-чате. Используйте ссылку выше для скачивания полного файла или посмотрите их в Telegram.*`;
+      }
+    }
+
+    return outputText;
+  }
 }
 
 // Shared Command processing logic (used for both real Telegram API AND browser simulator!)
@@ -1641,11 +1738,11 @@ async function processBotMessage(chatId: string, username: string, text: string)
       });
       selectPrompt += `\nПо умолчанию показываю навыки для первого персонажа (*${targetChar.name}*):\n\n`;
       
-      const skillsText = await getCharacterSkillsString(targetChar);
+      const skillsText = await getCharacterSkillsString(targetChar, chatId, isRealTelegram);
       return selectPrompt + skillsText;
     }
 
-    return await getCharacterSkillsString(targetChar);
+    return await getCharacterSkillsString(targetChar, chatId, isRealTelegram);
   }
 
   if (command === '/delete_character') {
@@ -1841,6 +1938,30 @@ app.get('/api/status', (req, res) => {
     projects: dbState.projects || [],
     logs: dbState.logs
   });
+});
+
+// Export character skills in EVE format (.txt file)
+app.get('/api/skills/export/:characterId', async (req, res) => {
+  const { characterId } = req.params;
+  const char = dbState.characters.find(c => c.id === characterId);
+  if (!char) {
+    return res.status(404).send('Character not found');
+  }
+
+  try {
+    const result = await fetchCharacterSkills(char);
+    if (result.error) {
+      return res.status(500).send(result.error);
+    }
+
+    const fileContent = formatSkillsForEVE(result.skillsList);
+    
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${char.name.replace(/[^a-zA-Z0-9]/g, '_')}_skills.txt"`);
+    res.send(fileContent);
+  } catch (err) {
+    res.status(500).send(err instanceof Error ? err.message : String(err));
+  }
 });
 
 // Update Settings
