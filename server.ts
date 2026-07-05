@@ -1406,6 +1406,38 @@ async function runTelegramPolling() {
   }
 }
 
+// Register Telegram commands dynamically so they show up in the Telegram app user interface (menu / slash suggestions)
+async function registerBotCommands(token: string) {
+  try {
+    const url = `https://api.telegram.org/bot${token}/setMyCommands`;
+    const commands = [
+      { command: 'start', description: 'Показать приветствие и список всех команд' },
+      { command: 'list', description: 'Показать список персонажей и перебитых ордеров' },
+      { command: 'projects', description: 'Показать активные индустриальные проекты' },
+      { command: 'projects_on', description: 'Включить авто-уведомления по проектам' },
+      { command: 'projects_off', description: 'Выключить авто-уведомления по проектам' },
+      { command: 'add_character', description: 'Добавить нового персонажа через EVE SSO' },
+      { command: 'delete_character', description: 'Удалить привязанного персонажа по ID' },
+      { command: 'check', description: 'Запустить принудительную проверку ордеров и проектов' }
+    ];
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commands })
+    });
+
+    if (response.ok) {
+      addLog('success', 'Telegram bot commands registered successfully in Telegram client UI.', 'bot');
+    } else {
+      const text = await response.text();
+      addLog('error', `Failed to register Telegram commands in Telegram UI: ${response.status} (${text})`, 'bot');
+    }
+  } catch (err) {
+    console.error('Error registering Telegram commands:', err);
+  }
+}
+
 // Control starting/stopping of Telegram Polling Engine
 function startTelegramBot() {
   const token = dbState.settings.telegramToken;
@@ -1414,6 +1446,8 @@ function startTelegramBot() {
     if (telegramPollTimeout) {
       clearTimeout(telegramPollTimeout);
     }
+    // Register commands in Telegram client menu dynamically
+    registerBotCommands(token);
     runTelegramPolling();
   } else {
     if (telegramPollTimeout) {
