@@ -1257,7 +1257,6 @@ async function getCharacterSkillsString(char: Character): Promise<string> {
   let totalSp = 0;
   let unallocatedSp = 0;
   let skillsList: { name: string; level: number; sp: number }[] = [];
-  let queueList: { name: string; level: number; remainingStr: string; finishDateStr?: string }[] = [];
 
   if (isSimulationMode || char.isSimulated) {
     if (char.id === '95465499') {
@@ -1272,31 +1271,6 @@ async function getCharacterSkillsString(char: Character): Promise<string> {
         { name: 'Cybernetics', level: 4, sp: 45200 },
         { name: 'Astrometrics', level: 4, sp: 135000 }
       ];
-
-      const now = Date.now();
-      const queues = (dbState.trackedSkills || []).filter(ts => ts.characterId === char.id);
-      queues.forEach(ts => {
-        const remainingMs = new Date(ts.finishDate).getTime() - now;
-        let remainingStr = 'Завершается...';
-        if (remainingMs > 0) {
-          const secs = Math.floor(remainingMs / 1000);
-          const mins = Math.floor(secs / 60);
-          const hours = Math.floor(mins / 60);
-          if (hours > 0) {
-            remainingStr = `${hours}ч ${mins % 60}м`;
-          } else {
-            remainingStr = `${mins}м ${secs % 60}с`;
-          }
-        } else {
-          remainingStr = 'Завершен';
-        }
-        queueList.push({
-          name: ts.skillName,
-          level: ts.finishedLevel,
-          remainingStr,
-          finishDateStr: ts.finishDate
-        });
-      });
     } else {
       totalSp = 12450000;
       unallocatedSp = 0;
@@ -1306,34 +1280,9 @@ async function getCharacterSkillsString(char: Character): Promise<string> {
         { name: 'Wholesale', level: 4, sp: 181000 },
         { name: 'Marketing', level: 4, sp: 120000 }
       ];
-
-      const now = Date.now();
-      const queues = (dbState.trackedSkills || []).filter(ts => ts.characterId === char.id);
-      queues.forEach(ts => {
-        const remainingMs = new Date(ts.finishDate).getTime() - now;
-        let remainingStr = 'Завершается...';
-        if (remainingMs > 0) {
-          const secs = Math.floor(remainingMs / 1000);
-          const mins = Math.floor(secs / 60);
-          const hours = Math.floor(mins / 60);
-          if (hours > 0) {
-            remainingStr = `${hours}ч ${mins % 60}м`;
-          } else {
-            remainingStr = `${mins}м ${secs % 60}с`;
-          }
-        } else {
-          remainingStr = 'Завершен';
-        }
-        queueList.push({
-          name: ts.skillName,
-          level: ts.finishedLevel,
-          remainingStr,
-          finishDateStr: ts.finishDate
-        });
-      });
     }
   } else {
-    // REAL EVE ONLINE CHARACTER SKILLS & SKILLQUEUE FETCH
+    // REAL EVE ONLINE CHARACTER SKILLS FETCH
     const clientId = dbState.settings.eveClientId || process.env.EVE_CLIENT_ID;
     const clientSecret = dbState.settings.eveClientSecret || process.env.EVE_CLIENT_SECRET;
 
@@ -1370,24 +1319,13 @@ async function getCharacterSkillsString(char: Character): Promise<string> {
       unallocatedSp = skillsData.unallocated_sp || 0;
 
       const rawSkills = skillsData.skills || [];
-      const highSkills = rawSkills.filter(s => s.trained_skill_level >= 4);
-      const idsToResolve = highSkills.map(s => s.skill_id);
+      const idsToResolve = rawSkills.map(s => s.skill_id);
 
-      // Fetch queue
-      const queueUrl = `https://esi.evetech.net/latest/characters/${char.id}/skillqueue/?datasource=tranquility`;
-      const queueRes = await fetch(queueUrl, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      });
-
-      let rawQueue: any[] = [];
-      if (queueRes.ok) {
-        rawQueue = await queueRes.json() as any[];
-        rawQueue.forEach(item => idsToResolve.push(item.skill_id));
+      if (idsToResolve.length > 0) {
+        await resolveNames(idsToResolve);
       }
 
-      await resolveNames(idsToResolve);
-
-      highSkills.forEach(s => {
+      rawSkills.forEach(s => {
         const name = nameCache[String(s.skill_id)] || `Skill ${s.skill_id}`;
         skillsList.push({
           name,
@@ -1396,98 +1334,49 @@ async function getCharacterSkillsString(char: Character): Promise<string> {
         });
       });
 
-      skillsList.sort((a, b) => {
-        if (b.level !== a.level) return b.level - a.level;
-        return a.name.localeCompare(b.name);
-      });
-
-      const now = Date.now();
-      rawQueue.forEach(q => {
-        const name = nameCache[String(q.skill_id)] || `Skill ${q.skill_id}`;
-        let remainingStr = 'В очереди';
-        if (q.finish_date) {
-          const remainingMs = new Date(q.finish_date).getTime() - now;
-          if (remainingMs > 0) {
-            const secs = Math.floor(remainingMs / 1000);
-            const mins = Math.floor(secs / 60);
-            const hours = Math.floor(mins / 60);
-            const days = Math.floor(hours / 24);
-
-            if (days > 0) {
-              remainingStr = `${days}д ${hours % 24}ч`;
-            } else if (hours > 0) {
-              remainingStr = `${hours}ч ${mins % 60}м`;
-            } else {
-              remainingStr = `${mins}м ${secs % 60}с`;
-            }
-          } else {
-            remainingStr = 'Завершен';
-          }
-        } else {
-          remainingStr = 'Приостановлен';
-        }
-
-        queueList.push({
-          name,
-          level: q.finished_level,
-          remainingStr,
-          finishDateStr: q.finish_date
-        });
-      });
-
     } catch (err) {
       return `❌ *Ошибка получения навыков:* ${err instanceof Error ? err.message : String(err)}`;
     }
   }
 
-  let output = `🎓 *НАВЫКИ И ОЧЕРЕДЬ ПИЛОТА: ${char.name.toUpperCase()}*\n\n`;
+  // Sort alphabetically
+  skillsList.sort((a, b) => a.name.localeCompare(b.name));
+
+  const levelEmojis: { [key: number]: string } = {
+    5: '🔵',
+    4: '🟢',
+    3: '🟡',
+    2: '🟠',
+    1: '⚪'
+  };
+
+  let output = `🎓 *НАВЫКИ ПИЛОТА: ${char.name.toUpperCase()}*\n\n`;
   output += `📊 *Всего Skill Points:* \`${totalSp.toLocaleString()}\` SP\n`;
   if (unallocatedSp > 0) {
     output += `✨ *Нераспределенные SP:* \`${unallocatedSp.toLocaleString()}\` SP\n`;
   }
   output += `\n`;
 
-  output += `⏳ *ОЧЕРЕДЬ ИЗУЧЕНИЯ НАВЫКОВ (${queueList.length}):*\n`;
-  if (queueList.length === 0) {
-    output += ` 🚫 Изучение навыков не запущено.\n`;
-  } else {
-    queueList.forEach((q, idx) => {
-      const activeSymbol = idx === 0 && q.remainingStr !== 'Приостановлен' ? '▶️' : '⏹';
-      output += ` ${activeSymbol} *${q.name} ${romanize(q.level)}*\n` +
-                `   └ Осталось: \`${q.remainingStr}\`\n`;
-    });
-  }
-  output += `\n`;
-
-  output += `🏆 *ОСНОВНЫЕ НАВЫКИ (Уровень IV и V):*\n`;
-  const lvl5Skills = skillsList.filter(s => s.level === 5);
-  const lvl4Skills = skillsList.filter(s => s.level === 4);
-
+  output += `📚 *ИЗУЧЕННЫЕ НАВЫКИ (${skillsList.length}):*\n`;
   if (skillsList.length === 0) {
     output += `  _Информация о выученных навыках отсутствует._\n`;
   } else {
-    if (lvl5Skills.length > 0) {
-      output += `📍 *УРОВЕНЬ V (${lvl5Skills.length}):*\n`;
-      const showLvl5 = lvl5Skills.slice(0, 15);
-      showLvl5.forEach(s => {
-        output += `  🔹 *${s.name}*\n`;
-      });
-      if (lvl5Skills.length > 15) {
-        output += `  _и еще ${lvl5Skills.length - 15} навыков V уровня..._\n`;
-      }
-    }
-    output += `\n`;
+    const lines = skillsList.map(s => {
+      const emoji = levelEmojis[s.level] || '🔘';
+      return `${emoji} *${s.name}* — Уровень ${romanize(s.level)}`;
+    });
 
-    if (lvl4Skills.length > 0) {
-      output += `📍 *УРОВЕНЬ IV (${lvl4Skills.length}):*\n`;
-      const showLvl4 = lvl4Skills.slice(0, 10);
-      showLvl4.forEach(s => {
-        output += `  🔸 ${s.name}\n`;
-      });
-      if (lvl4Skills.length > 10) {
-        output += `  _и еще ${lvl4Skills.length - 10} навыков IV уровня..._\n`;
+    let tempOutput = output;
+    let addedCount = 0;
+    for (const line of lines) {
+      if (tempOutput.length + line.length + 5 > 3800) {
+        tempOutput += `\n... и еще ${lines.length - addedCount} навыков.`;
+        break;
       }
+      tempOutput += `\n${line}`;
+      addedCount++;
     }
+    output = tempOutput;
   }
 
   return output;
