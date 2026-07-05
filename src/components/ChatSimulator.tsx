@@ -13,7 +13,7 @@ export default function ChatSimulator({ onSendMessage, onRefreshData }: ChatSimu
     {
       id: 'welcome',
       sender: 'bot',
-      text: "👋 *Привет! Я EVE Market Monitor Bot!*\n\nЯ запущен в демонстрационном режиме. Вы можете отправлять мне команды прямо здесь, чтобы увидеть, как я реагирую и присылаю алерты!\n\n📋 *Доступные команды:*\n🔹 `/start` - показать список команд\n🔹 `/add_character` - подключить персонажа\n🔹 `/characters` - показать ваших пилотов\n🔹 `/check` - запустить проверку цен\n🔹 `/delete_character <ID>` - удалить персонажа",
+      text: "👋 *Привет! Я EVE Market, Industry & Skill Monitor Bot!*\n\nЗдесь ты можешь отправлять команды для управления ботом и проверки статуса твоих персонажей.\n\n📋 *Доступные команды:*\n🔹 `/start` - показать список всех команд\n🔹 `/add_character` - подключить персонажа через EVE SSO\n🔹 `/list` - показать список персонажей и перебитых ордеров\n🔹 `/projects` - показать активные индустриальные проекты\n🔹 `/skills` - показать прокачанные навыки и очередь изучения\n🔹 `/check` - принудительно запустить проверку цен, проектов и навыков",
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     }
   ]);
@@ -207,10 +207,22 @@ export default function ChatSimulator({ onSendMessage, onRefreshData }: ChatSimu
           /add_character
         </button>
         <button
-          onClick={() => handleCommandClick('/characters')}
+          onClick={() => handleCommandClick('/list')}
           className="text-[10px] bg-slate-900 hover:bg-slate-800 border border-slate-800 text-emerald-400 font-semibold px-2.5 py-1 rounded-full cursor-pointer transition-colors"
         >
-          /characters
+          /list
+        </button>
+        <button
+          onClick={() => handleCommandClick('/projects')}
+          className="text-[10px] bg-slate-900 hover:bg-slate-800 border border-slate-800 text-sky-400 font-semibold px-2.5 py-1 rounded-full cursor-pointer transition-colors"
+        >
+          /projects
+        </button>
+        <button
+          onClick={() => handleCommandClick('/skills')}
+          className="text-[10px] bg-slate-900 hover:bg-slate-800 border border-slate-800 text-purple-400 font-semibold px-2.5 py-1 rounded-full cursor-pointer transition-colors"
+        >
+          /skills
         </button>
         <button
           onClick={() => handleCommandClick('/check')}

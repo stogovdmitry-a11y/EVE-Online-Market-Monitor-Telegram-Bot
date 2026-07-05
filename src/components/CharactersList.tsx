@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { motion } from 'motion/react';
 import { Character, BotSettings } from '../types';
-import { User, ShieldAlert, Trash2, ShieldCheck, UserPlus, HelpCircle } from 'lucide-react';
+import { User, ShieldAlert, Trash2, ShieldCheck, HelpCircle } from 'lucide-react';
 
 interface CharactersListProps {
   characters: Character[];
@@ -11,22 +11,7 @@ interface CharactersListProps {
 }
 
 export default function CharactersList({ characters, settings, onAddCharacter, onDeleteCharacter }: CharactersListProps) {
-  const [manualName, setManualName] = useState('');
-  const [manualId, setManualId] = useState('');
-  const [showManual, setShowManual] = useState(false);
-
-  const handleManualAdd = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!manualName || !manualId) return;
-    onAddCharacter(manualId.trim(), manualName.trim(), true);
-    setManualName('');
-    setManualId('');
-    setShowManual(false);
-  };
-
   const handleSSOLogin = () => {
-    // If we are in simulation mode, our server has a beautiful bypass that logs in a mock pilot instantly.
-    // Otherwise, it triggers the real OAuth SSO flow if client credentials are set.
     const appIdUrl = window.location.origin;
     const loginUrl = `${appIdUrl}/api/auth/eve/login?chatId=web_user_${Math.floor(Math.random() * 100000)}`;
     
@@ -139,64 +124,8 @@ export default function CharactersList({ characters, settings, onAddCharacter, o
             referrerPolicy="no-referrer" 
             className="w-5 h-5 rounded-sm"
           />
-          {settings.isSimulationMode 
-            ? 'Добавить демо-персонажа через EVE SSO' 
-            : 'Войти через EVE Online SSO (Реальный)'}
+          Добавить персонажа через EVE Online SSO
         </button>
-
-        {settings.isSimulationMode && (
-          <div className="text-center">
-            <button
-              onClick={() => setShowManual(!showManual)}
-              className="text-xs text-indigo-400 hover:text-indigo-300 underline font-medium cursor-pointer"
-            >
-              {showManual ? 'Скрыть ручное добавление' : 'Добавить персонажа вручную по ID'}
-            </button>
-          </div>
-        )}
-
-        {showManual && settings.isSimulationMode && (
-          <motion.form
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            onSubmit={handleManualAdd}
-            className="p-3.5 bg-slate-950/80 rounded-lg border border-indigo-950/40 space-y-3"
-          >
-            <div className="text-xs font-bold text-indigo-300 flex items-center gap-1">
-              <UserPlus className="w-3.5 h-3.5" /> Быстрое ручное добавление (Для тестов)
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-[10px] font-semibold text-slate-400 block mb-0.5">Имя пилота</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ivan Drago"
-                  value={manualName}
-                  onChange={(e) => setManualName(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 text-xs text-slate-200 px-2.5 py-1.5 rounded outline-none"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-semibold text-slate-400 block mb-0.5">Character ID</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="95465499"
-                  value={manualId}
-                  onChange={(e) => setManualId(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 text-xs text-slate-200 px-2.5 py-1.5 rounded outline-none font-mono"
-                />
-              </div>
-            </div>
-            <button
-              type="submit"
-              className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold py-1.5 px-3 rounded cursor-pointer transition-colors"
-            >
-              Добавить этого пилота
-            </button>
-          </motion.form>
-        )}
       </div>
     </motion.div>
   );

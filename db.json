@@ -1,0 +1,25 @@
+{
+  "settings": {
+    "telegramToken": "",
+    "intervalMinutes": 5,
+    "botUsername": "EveMarketMonitorBot",
+    "isBotRunning": false,
+    "isSimulationMode": false,
+    "industryNotificationsEnabled": true,
+    "skillsNotificationsEnabled": true
+  },
+  "characters": [],
+  "tokens": {},
+  "orders": [],
+  "projects": [],
+  "logs": [
+    {
+      "id": "log-1",
+      "timestamp": "2026-07-05T13:41:13.516Z",
+      "level": "success",
+      "message": "Application server booted on port 3000",
+      "type": "system"
+    }
+  ],
+  "trackedSkills": []
+}

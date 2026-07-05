@@ -57,6 +57,7 @@ export interface BotSettings {
   eveClientId?: string;
   eveClientSecret?: string;
   industryNotificationsEnabled?: boolean;
+  skillsNotificationsEnabled?: boolean;
 }
 
 export interface BotLog {

@@ -265,9 +265,9 @@ export default function Dashboard() {
             <span className="text-slate-700 select-none">|</span>
             <div className="flex items-center gap-1.5 text-slate-400">
               <Globe className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Режим:</span>
-              <span className={`font-semibold ${settings?.isSimulationMode ? 'text-indigo-400' : 'text-emerald-400'}`}>
-                {settings?.isSimulationMode ? '🧪 Симуляция' : '🛰️ Реальный ESI'}
+              <span>Сервер:</span>
+              <span className="font-semibold text-emerald-400">
+                Tranquility
               </span>
             </div>
           </div>
@@ -342,7 +342,7 @@ export default function Dashboard() {
             )}
             <CharactersList
               characters={characters}
-              settings={settings || { telegramToken: '', intervalMinutes: 5, isBotRunning: false, isSimulationMode: true }}
+              settings={settings || { telegramToken: '', intervalMinutes: 5, isBotRunning: false, isSimulationMode: false }}
               onAddCharacter={handleAddCharacter}
               onDeleteCharacter={handleDeleteCharacter}
             />

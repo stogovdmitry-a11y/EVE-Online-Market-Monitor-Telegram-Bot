@@ -36,6 +36,17 @@ app.use(express.json());
 // Persistent DB File Path
 const DB_PATH = path.join(process.cwd(), 'db.json');
 
+interface TrackedSkill {
+  id: string; // charId-skillId-finishedLevel
+  characterId: string;
+  characterName: string;
+  skillId: number;
+  skillName: string;
+  finishedLevel: number;
+  finishDate: string;
+  notified: boolean;
+}
+
 // Interface for DB file structure
 interface DatabaseState {
   settings: BotSettings;
@@ -50,6 +61,7 @@ interface DatabaseState {
   orders: Order[];
   projects: IndustryJob[];
   logs: BotLog[];
+  trackedSkills?: TrackedSkill[];
 }
 
 // Initial/default DB structure
@@ -59,86 +71,19 @@ const defaultState: DatabaseState = {
     intervalMinutes: 5,
     botUsername: 'EveMarketMonitorBot',
     isBotRunning: false,
-    isSimulationMode: true,
+    isSimulationMode: false,
     industryNotificationsEnabled: true,
+    skillsNotificationsEnabled: true,
   },
-  characters: [
-    {
-      id: '95465499',
-      name: 'Stogov Dmitry',
-      avatar: 'https://images.evetech.net/characters/95465499/portrait?size=128',
-      activeOrdersCount: 2,
-      status: 'active',
-      registeredAt: new Date().toISOString(),
-      isSimulated: true,
-    },
-    {
-      id: '91234567',
-      name: 'Alt Jita Trader',
-      avatar: 'https://images.evetech.net/characters/91234567/portrait?size=128',
-      activeOrdersCount: 1,
-      status: 'active',
-      registeredAt: new Date().toISOString(),
-      isSimulated: true,
-    }
-  ],
+  characters: [],
   tokens: {},
-  orders: [
-    {
-      id: 'ord-101',
-      characterId: '95465499',
-      characterName: 'Stogov Dmitry',
-      itemId: '34',
-      itemName: 'Tritanium',
-      isBuyOrder: false,
-      price: 5.25,
-      locationId: '60003760',
-      locationName: 'Jita IV - Moon 4 - Caldari Navy Assembly Plant',
-      bestPrice: 5.25,
-      status: 'best',
-      volumeRemain: 500000,
-      volumeTotal: 1000000,
-      lastChecked: new Date().toISOString()
-    },
-    {
-      id: 'ord-102',
-      characterId: '95465499',
-      characterName: 'Stogov Dmitry',
-      itemId: '35',
-      itemName: 'Pyerite',
-      isBuyOrder: true,
-      price: 12.50,
-      locationId: '60003760',
-      locationName: 'Jita IV - Moon 4 - Caldari Navy Assembly Plant',
-      bestPrice: 12.45,
-      status: 'best',
-      volumeRemain: 250000,
-      volumeTotal: 500000,
-      lastChecked: new Date().toISOString()
-    },
-    {
-      id: 'ord-103',
-      characterId: '91234567',
-      characterName: 'Alt Jita Trader',
-      itemId: '12005',
-      itemName: 'Ishtar',
-      isBuyOrder: false,
-      price: 245000000,
-      locationId: '60003760',
-      locationName: 'Jita IV - Moon 4 - Caldari Navy Assembly Plant',
-      bestPrice: 245000000,
-      status: 'best',
-      volumeRemain: 5,
-      volumeTotal: 10,
-      lastChecked: new Date().toISOString()
-    }
-  ],
+  orders: [],
   logs: [
     {
       id: 'log-1',
       timestamp: new Date().toISOString(),
       level: 'success',
-      message: 'System loaded successfully. Simulation mode active with 2 demo characters.',
+      message: 'System loaded successfully. App ready.',
       type: 'system'
     }
   ],
@@ -161,7 +106,8 @@ function loadDB() {
         tokens: parsed.tokens || defaultState.tokens,
         orders: parsed.orders || defaultState.orders,
         projects: parsed.projects || defaultState.projects || [],
-        logs: parsed.logs || defaultState.logs
+        logs: parsed.logs || defaultState.logs,
+        trackedSkills: parsed.trackedSkills || []
       };
     } else {
       dbState = { ...defaultState };
@@ -757,6 +703,214 @@ async function performIndustryCheck() {
   }
 }
 
+function romanize(num: number): string {
+  const lookup: { [key: number]: string } = { 5: 'V', 4: 'IV', 3: 'III', 2: 'II', 1: 'I' };
+  return lookup[num] || String(num);
+}
+
+// Fetch and check EVE Skills Training Queue (Actual + Simulated)
+async function performSkillsCheck() {
+  addLog('info', 'Skills check initiated.', 'market');
+  const { isSimulationMode, telegramToken } = dbState.settings;
+
+  const notificationsToSend: {
+    characterName: string;
+    skillName: string;
+    finishedLevel: number;
+  }[] = [];
+
+  if (isSimulationMode) {
+    if (!dbState.trackedSkills || dbState.trackedSkills.length === 0) {
+      const now = Date.now();
+      dbState.trackedSkills = [
+        {
+          id: '95465499-3428-5',
+          characterId: '95465499',
+          characterName: 'Stogov Dmitry',
+          skillId: 3428,
+          skillName: 'Advanced Weapon Upgrades',
+          finishedLevel: 5,
+          finishDate: new Date(now + 30000).toISOString(), // Ends in 30 seconds
+          notified: false
+        },
+        {
+          id: '95465499-3411-5',
+          characterId: '95465499',
+          characterName: 'Stogov Dmitry',
+          skillId: 3411,
+          skillName: 'Cybernetics',
+          finishedLevel: 5,
+          finishDate: new Date(now + 18000000).toISOString(), // 5 hours
+          notified: false
+        },
+        {
+          id: '91234567-16596-5',
+          characterId: '91234567',
+          characterName: 'Alt Jita Trader',
+          skillId: 16596,
+          skillName: 'Wholesale',
+          finishedLevel: 5,
+          finishDate: new Date(now + 120000).toISOString(), // Ends in 2 minutes
+          notified: false
+        }
+      ];
+      saveDB();
+    }
+
+    dbState.trackedSkills = dbState.trackedSkills.map(ts => {
+      if (!ts.notified) {
+        const finishMs = new Date(ts.finishDate).getTime();
+        if (Date.now() >= finishMs) {
+          notificationsToSend.push({
+            characterName: ts.characterName,
+            skillName: ts.skillName,
+            finishedLevel: ts.finishedLevel
+          });
+          ts.notified = true;
+        }
+      }
+      return ts;
+    });
+    saveDB();
+    addLog('success', 'Skills check complete (Simulation Mode). Simulated queues updated.', 'market');
+  } else {
+    // REAL SKILLS QUEUE CHECK
+    const clientId = dbState.settings.eveClientId || process.env.EVE_CLIENT_ID;
+    const clientSecret = dbState.settings.eveClientSecret || process.env.EVE_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      addLog('error', 'Cannot perform real skills check: EVE Developer Client ID or Client Secret is not set in settings or env.', 'market');
+      return;
+    }
+
+    const realCharacters = dbState.characters.filter(c => !c.isSimulated);
+    if (realCharacters.length === 0) {
+      return;
+    }
+
+    for (const char of realCharacters) {
+      try {
+        const tokenDetails = dbState.tokens[char.id];
+        if (!tokenDetails) continue;
+
+        let accessToken = tokenDetails.access_token;
+        if (Date.now() + 60000 > tokenDetails.expires_at) {
+          accessToken = await refreshCharacterToken(char.id, tokenDetails.refresh_token, clientId, clientSecret);
+        }
+
+        const skillQueueUrl = `https://esi.evetech.net/latest/characters/${char.id}/skillqueue/?datasource=tranquility`;
+        const skillQueueRes = await fetch(skillQueueUrl, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
+        if (skillQueueRes.ok) {
+          const queue = await skillQueueRes.json() as any[];
+          
+          // Resolve skill names via name resolver
+          const idsToResolve = queue.map(q => q.skill_id);
+          if (idsToResolve.length > 0) {
+            await resolveNames(idsToResolve);
+          }
+
+          if (!dbState.trackedSkills) {
+            dbState.trackedSkills = [];
+          }
+
+          for (const item of queue) {
+            if (item.finish_date) {
+              const key = `${char.id}-${item.skill_id}-${item.finished_level}`;
+              const existing = dbState.trackedSkills.find(ts => ts.id === key);
+              const skillName = nameCache[String(item.skill_id)] || `Skill ${item.skill_id}`;
+
+              if (!existing) {
+                dbState.trackedSkills.push({
+                  id: key,
+                  characterId: char.id,
+                  characterName: char.name,
+                  skillId: item.skill_id,
+                  skillName,
+                  finishedLevel: item.finished_level,
+                  finishDate: item.finish_date,
+                  notified: false
+                });
+              } else if (existing.finishDate !== item.finish_date) {
+                existing.finishDate = item.finish_date;
+                if (new Date(item.finish_date).getTime() > Date.now()) {
+                  existing.notified = false;
+                }
+              }
+            }
+          }
+          saveDB();
+
+          // Evaluate notifications for this character
+          dbState.trackedSkills.forEach(ts => {
+            if (ts.characterId === char.id && !ts.notified) {
+              const finishMs = new Date(ts.finishDate).getTime();
+              if (Date.now() >= finishMs) {
+                notificationsToSend.push({
+                  characterName: ts.characterName,
+                  skillName: ts.skillName,
+                  finishedLevel: ts.finishedLevel
+                });
+                ts.notified = true;
+              }
+            }
+          });
+          saveDB();
+        } else {
+          addLog('error', `Failed to fetch skill queue for ${char.name}: ${skillQueueRes.statusText}`, 'market');
+        }
+      } catch (err) {
+        addLog('error', `Error handling skills check for character ${char.name}: ${err instanceof Error ? err.message : String(err)}`, 'market');
+      }
+    }
+    addLog('success', 'Real skills check complete.', 'market');
+  }
+
+  // Send skill completion notifications to Telegram
+  const skillsEnabled = dbState.settings.skillsNotificationsEnabled !== false;
+  if (skillsEnabled && notificationsToSend.length > 0 && telegramToken) {
+    addLog('info', `Sending ${notificationsToSend.length} skill completion notifications to Telegram...`, 'bot');
+    for (const notif of notificationsToSend) {
+      // First line MUST be the skill name as requested
+      const messageText = `⚡️ *${notif.skillName} ${romanize(notif.finishedLevel)}* — ИЗУЧЕН!\n\n` +
+                          `🎉 *EVE Skill Monitor*\n` +
+                          `👤 *Персонаж:* ${notif.characterName}\n` +
+                          `📈 Поздравляем, изучение навыка успешно завершено!`;
+
+      try {
+        const chatIds = Array.from(new Set(dbState.characters.map(c => (c as any).chatId).filter(Boolean)))
+          .filter(id => /^-?\d+$/.test(id));
+        
+        if (chatIds.length === 0) continue;
+
+        for (const chatId of chatIds) {
+          const sendUrl = `https://api.telegram.org/bot${telegramToken}/sendMessage`;
+          const response = await fetch(sendUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: messageText,
+              parse_mode: 'Markdown'
+            })
+          });
+
+          if (!response.ok) {
+            const errText = await response.text();
+            addLog('error', `Telegram sendMessage failed for skill notif: ${response.status} (${errText})`, 'bot');
+          } else {
+            addLog('success', `Skill completion alert sent to Telegram chat ${chatId} for: ${notif.skillName}`, 'bot');
+          }
+        }
+      } catch (tgErr) {
+        addLog('error', `Failed to deliver Telegram skill notification: ${tgErr instanceof Error ? tgErr.message : String(tgErr)}`, 'bot');
+      }
+    }
+  }
+}
+
 // Check EVE Market Orders engine (Actual + Simulated)
 async function performMarketCheck() {
   addLog('info', 'Market check initiated.', 'market');
@@ -1026,18 +1180,17 @@ async function performMarketCheck() {
   if (notificationsToSend.length > 0 && telegramToken) {
     addLog('info', `Sending ${notificationsToSend.length} undercut notifications to Telegram...`, 'bot');
     for (const notif of notificationsToSend) {
-      const typeStr = notif.isBuyOrder ? 'BUY ORDER' : 'SELL ORDER';
-      const indicatorStr = notif.isBuyOrder ? '🟢 Buy' : '🔴 Sell';
+      const typeStr = notif.isBuyOrder ? 'ПОКУПКА' : 'ПРОДАЖА';
       const detailsStr = notif.isBuyOrder 
-        ? `My Buy Price: ${notif.myPrice.toLocaleString()} ISK\n🔥 Highest Buy Price: ${notif.bestPrice.toLocaleString()} ISK (Beaten by ${(notif.bestPrice - notif.myPrice).toFixed(2)} ISK)`
-        : `My Sell Price: ${notif.myPrice.toLocaleString()} ISK\n🔥 Lowest Sell Price: ${notif.bestPrice.toLocaleString()} ISK (Beaten by ${(notif.myPrice - notif.bestPrice).toFixed(2)} ISK)`;
+        ? `Моя цена: \`${notif.myPrice.toLocaleString()} ISK\`\n🔥 Лучшая цена: \`${notif.bestPrice.toLocaleString()} ISK\` (Перебит на ${(notif.bestPrice - notif.myPrice).toFixed(2)} ISK)`
+        : `Моя цена: \`${notif.myPrice.toLocaleString()} ISK\`\n🔥 Лучшая цена: \`${notif.bestPrice.toLocaleString()} ISK\` (Перебит на ${(notif.myPrice - notif.bestPrice).toFixed(2)} ISK)`;
 
-      const messageText = `🚨 *EVE Market Monitor: UNDERCUT ALERT!*\n\n` +
-                          `📦 *Item Name:* ${notif.itemName}\n` +
-                          `🌌 *Solar System:* ${notif.systemName}\n` +
-                          `📈 *Order Type:* ${typeStr}\n` +
+      const messageText = `🚨 *${notif.itemName}* — ПЕРЕБИТ!\n\n` +
+                          `📊 *EVE Market Monitor*\n` +
+                          `🌌 *Система:* ${notif.systemName}\n` +
+                          `📈 *Тип ордера:* ${typeStr}\n` +
                           `${detailsStr}\n` +
-                          `👤 *Character:* ${notif.characterName}`;
+                          `👤 *Персонаж:* ${notif.characterName}`;
 
       try {
         // Filter out any temporary non-numeric web chat IDs (e.g. "web_user_XXXXX")
@@ -1077,6 +1230,9 @@ async function performMarketCheck() {
 
   // Run the industry projects check as part of the market check cycle
   await performIndustryCheck();
+
+  // Run the skills queue check as part of the market check cycle
+  await performSkillsCheck();
 }
 
 // Background scheduler
@@ -1094,6 +1250,248 @@ function startCheckScheduler() {
 
 // Start Scheduler
 startCheckScheduler();
+
+async function getCharacterSkillsString(char: Character): Promise<string> {
+  const { isSimulationMode } = dbState.settings;
+
+  let totalSp = 0;
+  let unallocatedSp = 0;
+  let skillsList: { name: string; level: number; sp: number }[] = [];
+  let queueList: { name: string; level: number; remainingStr: string; finishDateStr?: string }[] = [];
+
+  if (isSimulationMode || char.isSimulated) {
+    if (char.id === '95465499') {
+      totalSp = 45230100;
+      unallocatedSp = 120000;
+      skillsList = [
+        { name: 'Caldari Cruiser', level: 5, sp: 256000 },
+        { name: 'Heavy Assault Cruisers', level: 5, sp: 1280000 },
+        { name: 'Medium Hybrid Turret', level: 5, sp: 256000 },
+        { name: 'Weapon Upgrades', level: 5, sp: 256000 },
+        { name: 'Advanced Weapon Upgrades', level: 4, sp: 256000 },
+        { name: 'Cybernetics', level: 4, sp: 45200 },
+        { name: 'Astrometrics', level: 4, sp: 135000 }
+      ];
+
+      const now = Date.now();
+      const queues = (dbState.trackedSkills || []).filter(ts => ts.characterId === char.id);
+      queues.forEach(ts => {
+        const remainingMs = new Date(ts.finishDate).getTime() - now;
+        let remainingStr = 'Завершается...';
+        if (remainingMs > 0) {
+          const secs = Math.floor(remainingMs / 1000);
+          const mins = Math.floor(secs / 60);
+          const hours = Math.floor(mins / 60);
+          if (hours > 0) {
+            remainingStr = `${hours}ч ${mins % 60}м`;
+          } else {
+            remainingStr = `${mins}м ${secs % 60}с`;
+          }
+        } else {
+          remainingStr = 'Завершен';
+        }
+        queueList.push({
+          name: ts.skillName,
+          level: ts.finishedLevel,
+          remainingStr,
+          finishDateStr: ts.finishDate
+        });
+      });
+    } else {
+      totalSp = 12450000;
+      unallocatedSp = 0;
+      skillsList = [
+        { name: 'Trade', level: 5, sp: 256000 },
+        { name: 'Retail', level: 5, sp: 256000 },
+        { name: 'Wholesale', level: 4, sp: 181000 },
+        { name: 'Marketing', level: 4, sp: 120000 }
+      ];
+
+      const now = Date.now();
+      const queues = (dbState.trackedSkills || []).filter(ts => ts.characterId === char.id);
+      queues.forEach(ts => {
+        const remainingMs = new Date(ts.finishDate).getTime() - now;
+        let remainingStr = 'Завершается...';
+        if (remainingMs > 0) {
+          const secs = Math.floor(remainingMs / 1000);
+          const mins = Math.floor(secs / 60);
+          const hours = Math.floor(mins / 60);
+          if (hours > 0) {
+            remainingStr = `${hours}ч ${mins % 60}м`;
+          } else {
+            remainingStr = `${mins}м ${secs % 60}с`;
+          }
+        } else {
+          remainingStr = 'Завершен';
+        }
+        queueList.push({
+          name: ts.skillName,
+          level: ts.finishedLevel,
+          remainingStr,
+          finishDateStr: ts.finishDate
+        });
+      });
+    }
+  } else {
+    // REAL EVE ONLINE CHARACTER SKILLS & SKILLQUEUE FETCH
+    const clientId = dbState.settings.eveClientId || process.env.EVE_CLIENT_ID;
+    const clientSecret = dbState.settings.eveClientSecret || process.env.EVE_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      return `❌ *Ошибка конфигурации EVE Developer Client ID/Secret на сервере!*`;
+    }
+
+    const tokenDetails = dbState.tokens[char.id];
+    if (!tokenDetails) {
+      return `❌ *Токен авторизации для персонажа ${char.name} отсутствует. Переподключите персонажа с помощью /add_character.*`;
+    }
+
+    try {
+      let accessToken = tokenDetails.access_token;
+      if (Date.now() + 60000 > tokenDetails.expires_at) {
+        accessToken = await refreshCharacterToken(char.id, tokenDetails.refresh_token, clientId, clientSecret);
+      }
+
+      // Fetch Skills list
+      const skillsUrl = `https://esi.evetech.net/latest/characters/${char.id}/skills/?datasource=tranquility`;
+      const skillsRes = await fetch(skillsUrl, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+
+      if (!skillsRes.ok) {
+        if (skillsRes.status === 403) {
+          return `❌ *Ошибка доступа (403)!*\n\nПерсонажу *${char.name}* требуются дополнительные права на навыки. Пожалуйста, переподключите его через /add_character.`;
+        }
+        return `❌ *Не удалось загрузить навыки с EVE ESI: ${skillsRes.statusText}*`;
+      }
+
+      const skillsData = await skillsRes.json() as { skills: any[]; total_sp: number; unallocated_sp?: number };
+      totalSp = skillsData.total_sp;
+      unallocatedSp = skillsData.unallocated_sp || 0;
+
+      const rawSkills = skillsData.skills || [];
+      const highSkills = rawSkills.filter(s => s.trained_skill_level >= 4);
+      const idsToResolve = highSkills.map(s => s.skill_id);
+
+      // Fetch queue
+      const queueUrl = `https://esi.evetech.net/latest/characters/${char.id}/skillqueue/?datasource=tranquility`;
+      const queueRes = await fetch(queueUrl, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+
+      let rawQueue: any[] = [];
+      if (queueRes.ok) {
+        rawQueue = await queueRes.json() as any[];
+        rawQueue.forEach(item => idsToResolve.push(item.skill_id));
+      }
+
+      await resolveNames(idsToResolve);
+
+      highSkills.forEach(s => {
+        const name = nameCache[String(s.skill_id)] || `Skill ${s.skill_id}`;
+        skillsList.push({
+          name,
+          level: s.trained_skill_level,
+          sp: s.skillpoints_in_skill
+        });
+      });
+
+      skillsList.sort((a, b) => {
+        if (b.level !== a.level) return b.level - a.level;
+        return a.name.localeCompare(b.name);
+      });
+
+      const now = Date.now();
+      rawQueue.forEach(q => {
+        const name = nameCache[String(q.skill_id)] || `Skill ${q.skill_id}`;
+        let remainingStr = 'В очереди';
+        if (q.finish_date) {
+          const remainingMs = new Date(q.finish_date).getTime() - now;
+          if (remainingMs > 0) {
+            const secs = Math.floor(remainingMs / 1000);
+            const mins = Math.floor(secs / 60);
+            const hours = Math.floor(mins / 60);
+            const days = Math.floor(hours / 24);
+
+            if (days > 0) {
+              remainingStr = `${days}д ${hours % 24}ч`;
+            } else if (hours > 0) {
+              remainingStr = `${hours}ч ${mins % 60}м`;
+            } else {
+              remainingStr = `${mins}м ${secs % 60}с`;
+            }
+          } else {
+            remainingStr = 'Завершен';
+          }
+        } else {
+          remainingStr = 'Приостановлен';
+        }
+
+        queueList.push({
+          name,
+          level: q.finished_level,
+          remainingStr,
+          finishDateStr: q.finish_date
+        });
+      });
+
+    } catch (err) {
+      return `❌ *Ошибка получения навыков:* ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  let output = `🎓 *НАВЫКИ И ОЧЕРЕДЬ ПИЛОТА: ${char.name.toUpperCase()}*\n\n`;
+  output += `📊 *Всего Skill Points:* \`${totalSp.toLocaleString()}\` SP\n`;
+  if (unallocatedSp > 0) {
+    output += `✨ *Нераспределенные SP:* \`${unallocatedSp.toLocaleString()}\` SP\n`;
+  }
+  output += `\n`;
+
+  output += `⏳ *ОЧЕРЕДЬ ИЗУЧЕНИЯ НАВЫКОВ (${queueList.length}):*\n`;
+  if (queueList.length === 0) {
+    output += ` 🚫 Изучение навыков не запущено.\n`;
+  } else {
+    queueList.forEach((q, idx) => {
+      const activeSymbol = idx === 0 && q.remainingStr !== 'Приостановлен' ? '▶️' : '⏹';
+      output += ` ${activeSymbol} *${q.name} ${romanize(q.level)}*\n` +
+                `   └ Осталось: \`${q.remainingStr}\`\n`;
+    });
+  }
+  output += `\n`;
+
+  output += `🏆 *ОСНОВНЫЕ НАВЫКИ (Уровень IV и V):*\n`;
+  const lvl5Skills = skillsList.filter(s => s.level === 5);
+  const lvl4Skills = skillsList.filter(s => s.level === 4);
+
+  if (skillsList.length === 0) {
+    output += `  _Информация о выученных навыках отсутствует._\n`;
+  } else {
+    if (lvl5Skills.length > 0) {
+      output += `📍 *УРОВЕНЬ V (${lvl5Skills.length}):*\n`;
+      const showLvl5 = lvl5Skills.slice(0, 15);
+      showLvl5.forEach(s => {
+        output += `  🔹 *${s.name}*\n`;
+      });
+      if (lvl5Skills.length > 15) {
+        output += `  _и еще ${lvl5Skills.length - 15} навыков V уровня..._\n`;
+      }
+    }
+    output += `\n`;
+
+    if (lvl4Skills.length > 0) {
+      output += `📍 *УРОВЕНЬ IV (${lvl4Skills.length}):*\n`;
+      const showLvl4 = lvl4Skills.slice(0, 10);
+      showLvl4.forEach(s => {
+        output += `  🔸 ${s.name}\n`;
+      });
+      if (lvl4Skills.length > 10) {
+        output += `  _и еще ${lvl4Skills.length - 10} навыков IV уровня..._\n`;
+      }
+    }
+  }
+
+  return output;
+}
 
 // Shared Command processing logic (used for both real Telegram API AND browser simulator!)
 async function processBotMessage(chatId: string, username: string, text: string): Promise<string> {
@@ -1121,25 +1519,26 @@ async function processBotMessage(chatId: string, username: string, text: string)
   }
 
   if (command === '/start') {
-    return `👋 *Привет! Я EVE Market & Industry Monitor Bot!*\n\n` +
-           `Я помогу тебе следить за твоими ордерами в Jita и завершением индустриальных проектов (производство, исследование, копирование).\n` +
-           `Если кто-то перебьет твою цену или проект закончится, я моментально пришлю тебе оповещение!\n\n` +
+    return `👋 *Привет! Я EVE Market, Industry & Skill Monitor Bot!*\n\n` +
+           `Я помогу тебе следить за ордерами в Jita, индустриальными проектами и изучением навыков персонажей.\n` +
+           `Если кто-то перебьет твою цену, проект завершится или изучится навык, я моментально пришлю тебе оповещение!\n\n` +
            `📋 *Доступные команды:*\n` +
            `🔹 /start - показать это меню и список всех команд\n` +
            `🔹 /add_character - добавить нового персонажа через EVE SSO\n` +
            `🔹 /list (или /characters) - показать список персонажей и перебитых ордеров\n` +
            `🔹 /projects - показать активные индустриальные проекты\n` +
-           `🔹 /projects on (или /projects_on) - включить оповещения о проектах\n` +
-           `🔹 /projects off (или /projects_off) - выключить оповещения о проектах\n` +
+           `🔹 /projects on (или /projects_off) - включить/выключить оповещения о проектах\n` +
+           `🔹 /skills [персонаж] - показать прокачанные навыки и очередь изучения\n` +
+           `🔹 /skills on (или /skills_off) - включить/выключить оповещения о навыках\n` +
            `🔹 /delete_character <ID> - удалить персонажа по ID\n` +
-           `🔹 /check - принудительно запустить проверку цен и проектов`;
+           `🔹 /check - принудительно запустить проверку цен, проектов и навыков`;
   }
 
   if (command === '/add_character') {
-    // Generate actual EVE SSO URL with both market and industry scopes
+    // Generate actual EVE SSO URL with both market, industry, and skills scopes
     const appUrl = lastKnownAppUrl || process.env.APP_URL || `http://localhost:3000`;
     const clientId = dbState.settings.eveClientId || process.env.EVE_CLIENT_ID || 'MOCK_CLIENT_ID';
-    const scopes = 'esi-markets.read_character_orders.v1 esi-industry.read_character_jobs.v1 esi-industry.read_corporation_jobs.v1';
+    const scopes = 'esi-markets.read_character_orders.v1 esi-industry.read_character_jobs.v1 esi-industry.read_corporation_jobs.v1 esi-skills.read_skills.v1 esi-skills.read_skillqueue.v1';
     const ssoUrl = `https://login.eveonline.com/v2/oauth/authorize/?response_type=code&redirect_uri=${encodeURIComponent(appUrl + '/api/auth/eve/callback')}&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&state=${chatId}`;
 
     return `👤 *Добавление персонажа:*\n\n` +
@@ -1303,6 +1702,63 @@ async function processBotMessage(chatId: string, username: string, text: string)
     return responseText;
   }
 
+  if (command === '/skills_on') {
+    dbState.settings.skillsNotificationsEnabled = true;
+    saveDB();
+    addLog('info', `Skills notifications enabled by user command /skills_on from chat ${chatId}`, 'bot');
+    return `🔔 *Оповещения по изучению навыков включены!*\n\nЯ буду присылать уведомления в этот чат, когда изучение навыков будет завершено.`;
+  }
+
+  if (command === '/skills_off') {
+    dbState.settings.skillsNotificationsEnabled = false;
+    saveDB();
+    addLog('info', `Skills notifications disabled by user command /skills_off from chat ${chatId}`, 'bot');
+    return `🔕 *Оповещения по изучению навыков выключены!*\n\nЯ больше не буду присылать уведомления о завершении изучения навыков. Но ты все еще можешь проверять статус командой /skills.`;
+  }
+
+  if (command === '/skills') {
+    const subCommand = args[0]?.toLowerCase();
+    if (subCommand === 'on') {
+      dbState.settings.skillsNotificationsEnabled = true;
+      saveDB();
+      addLog('info', `Skills notifications enabled by user command /skills on from chat ${chatId}`, 'bot');
+      return `🔔 *Оповещения по изучению навыков включены!*\n\nЯ буду присылать уведомления в этот чат, когда изучение навыков будет завершено.`;
+    }
+    if (subCommand === 'off') {
+      dbState.settings.skillsNotificationsEnabled = false;
+      saveDB();
+      addLog('info', `Skills notifications disabled by user command /skills off from chat ${chatId}`, 'bot');
+      return `🔕 *Оповещения по изучению навыков выключены!*\n\nЯ больше не буду присылать уведомления о завершении изучения навыков. Но ты все еще можешь проверять статус командой /skills.`;
+    }
+
+    const chatChars = dbState.characters.filter(c => (c as any).chatId === chatId || c.isSimulated);
+    if (chatChars.length === 0) {
+      return `❌ *Список пуст!*\n\nУ тебя пока нет привязанных персонажей. Используй /add_character, чтобы добавить персонажа.`;
+    }
+
+    let targetChar = chatChars[0];
+    const searchArg = args.join(' ').toLowerCase().trim();
+
+    if (searchArg) {
+      const found = chatChars.find(c => c.name.toLowerCase().includes(searchArg) || c.id === searchArg);
+      if (!found) {
+        return `❌ *Персонаж "${args.join(' ')}" не найден!*\n\nДоступные пилоты: ${chatChars.map(c => c.name).join(', ')}`;
+      }
+      targetChar = found;
+    } else if (chatChars.length > 1) {
+      let selectPrompt = `👤 *У тебя привязано несколько персонажей:*\n\n`;
+      chatChars.forEach(c => {
+        selectPrompt += `🔹 \`/skills ${c.name}\`\n`;
+      });
+      selectPrompt += `\nПо умолчанию показываю навыки для первого персонажа (*${targetChar.name}*):\n\n`;
+      
+      const skillsText = await getCharacterSkillsString(targetChar);
+      return selectPrompt + skillsText;
+    }
+
+    return await getCharacterSkillsString(targetChar);
+  }
+
   if (command === '/delete_character') {
     const charIdToDelete = args[0];
     if (!charIdToDelete) {
@@ -1434,6 +1890,9 @@ async function registerBotCommands(token: string) {
       { command: 'projects', description: 'Показать активные индустриальные проекты' },
       { command: 'projects_on', description: 'Включить авто-уведомления по проектам' },
       { command: 'projects_off', description: 'Выключить авто-уведомления по проектам' },
+      { command: 'skills', description: 'Показать навыки и очередь изучения персонажа' },
+      { command: 'skills_on', description: 'Включить авто-уведомления по навыкам' },
+      { command: 'skills_off', description: 'Выключить авто-уведомления по навыкам' },
       { command: 'add_character', description: 'Добавить нового персонажа через EVE SSO' },
       { command: 'delete_character', description: 'Удалить привязанного персонажа по ID' },
       { command: 'check', description: 'Запустить принудительную проверку ордеров и проектов' }
@@ -1666,7 +2125,7 @@ app.get('/api/auth/eve/login', (req, res) => {
     return res.status(400).send('EVE SSO Client ID is not configured in settings or environment variables.');
   }
 
-  const scopes = 'esi-markets.read_character_orders.v1 esi-industry.read_character_jobs.v1 esi-industry.read_corporation_jobs.v1';
+  const scopes = 'esi-markets.read_character_orders.v1 esi-industry.read_character_jobs.v1 esi-industry.read_corporation_jobs.v1 esi-skills.read_skills.v1 esi-skills.read_skillqueue.v1';
   const ssoUrl = `https://login.eveonline.com/v2/oauth/authorize/?response_type=code&redirect_uri=${encodeURIComponent(appUrl + '/api/auth/eve/callback')}&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&state=${userTelegramChatId}`;
   res.redirect(ssoUrl);
 });

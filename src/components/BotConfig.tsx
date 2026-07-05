@@ -12,10 +12,10 @@ interface BotConfigProps {
 export default function BotConfig({ settings, onSaveSettings, isSaving }: BotConfigProps) {
   const [token, setToken] = useState(settings.telegramToken);
   const [interval, setInterval] = useState(settings.intervalMinutes);
-  const [isSim, setIsSim] = useState(settings.isSimulationMode);
   const [clientId, setClientId] = useState(settings.eveClientId || '');
   const [clientSecret, setClientSecret] = useState(settings.eveClientSecret || '');
   const [industryEnabled, setIndustryEnabled] = useState(settings.industryNotificationsEnabled !== false);
+  const [skillsEnabled, setSkillsEnabled] = useState(settings.skillsNotificationsEnabled !== false);
   const [showHelp, setShowHelp] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -23,10 +23,11 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
     onSaveSettings({
       telegramToken: token,
       intervalMinutes: Number(interval),
-      isSimulationMode: isSim,
+      isSimulationMode: false,
       eveClientId: clientId,
       eveClientSecret: clientSecret,
-      industryNotificationsEnabled: industryEnabled
+      industryNotificationsEnabled: industryEnabled,
+      skillsNotificationsEnabled: skillsEnabled
     });
   };
 
@@ -71,19 +72,21 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
           <div>
             <h4 className="font-semibold text-indigo-300 flex items-center gap-1.5 mb-1 text-sm">
               <Info className="w-4 h-4" />
-              Шаг 2: Настройка EVE SSO (Для реального режима)
+              Шаг 2: Настройка EVE SSO
             </h4>
             <p className="mb-1">
-              Чтобы использовать реальные данные своего EVE-персонажа без симуляции:
+              Чтобы использовать данные своего EVE-персонажа:
             </p>
             <ol className="list-decimal list-inside space-y-1 ml-1 text-slate-300">
               <li>Перейди на <a href="https://developers.eveonline.com" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline font-semibold">EVE Developers Portal</a> и создай приложение.</li>
               <li>Установи Callback URL как: <code className="bg-slate-800 px-1.5 py-0.5 rounded text-emerald-400 font-mono break-all text-[10px] select-all">{typeof window !== 'undefined' ? `${window.location.origin}/api/auth/eve/callback` : 'https://<APP_URL>/api/auth/eve/callback'}</code></li>
-              <li>Добавь следующие три области видимости (scopes):
+              <li>Добавь следующие пять областей видимости (scopes):
                 <ul className="list-disc list-inside ml-4 mt-1 space-y-0.5 text-amber-400 font-mono text-[11px]">
                   <li>esi-markets.read_character_orders.v1</li>
                   <li>esi-industry.read_character_jobs.v1</li>
                   <li>esi-industry.read_corporation_jobs.v1</li>
+                  <li>esi-skills.read_skills.v1</li>
+                  <li>esi-skills.read_skillqueue.v1</li>
                 </ul>
               </li>
               <li className="mt-1.5">Скопируй <span className="text-indigo-400 font-semibold">Client ID</span> и <span className="text-indigo-400 font-semibold">Secret Key</span> и вставь их в форму ниже.</li>
@@ -93,25 +96,6 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
       )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Simulation Switch */}
-        <div className="flex items-center justify-between p-3 bg-slate-950/40 rounded-lg border border-slate-800">
-          <div>
-            <label className="text-sm font-medium text-slate-200 block">Режим симуляции (Демо)</label>
-            <span className="text-xs text-slate-400 block">
-              Автоматически генерирует тестовых персонажей, ордера и тестовые undercut-события.
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIsSim(!isSim)}
-            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${isSim ? 'bg-indigo-600' : 'bg-slate-700'}`}
-          >
-            <span
-              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${isSim ? 'translate-x-5' : 'translate-x-0'}`}
-            />
-          </button>
-        </div>
-
         {/* Industry Notifications Switch */}
         <div className="flex items-center justify-between p-3 bg-slate-950/40 rounded-lg border border-slate-800">
           <div>
@@ -127,6 +111,25 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
           >
             <span
               className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${industryEnabled ? 'translate-x-5' : 'translate-x-0'}`}
+            />
+          </button>
+        </div>
+
+        {/* Skills Notifications Switch */}
+        <div className="flex items-center justify-between p-3 bg-slate-950/40 rounded-lg border border-slate-800">
+          <div>
+            <label className="text-sm font-medium text-slate-200 block">Оповещения об изучении навыков</label>
+            <span className="text-xs text-slate-400 block">
+              Отправлять уведомления в Telegram при завершении изучения навыков персонажа.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSkillsEnabled(!skillsEnabled)}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${skillsEnabled ? 'bg-indigo-600' : 'bg-slate-700'}`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${skillsEnabled ? 'translate-x-5' : 'translate-x-0'}`}
             />
           </button>
         </div>
@@ -177,50 +180,48 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
         </div>
 
         {/* Real Mode Client ID / Secret if simulation is off */}
-        {!isSim && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            className="space-y-3 pt-2 border-t border-slate-800"
-          >
-            <div className="text-xs font-bold text-indigo-400 flex items-center gap-1">
-              <Info className="w-3.5 h-3.5" /> Настройки разработчика EVE Online ESI (SSO)
-            </div>
-            
-            <div className="bg-slate-950/80 rounded-lg p-3 border border-indigo-950 text-slate-300 space-y-1 font-mono text-[11px]">
-              <span className="text-indigo-400 font-bold block text-[9px] uppercase tracking-wider">Callback URL для приложения EVE Portal:</span>
-              <span className="text-emerald-400 font-semibold break-all select-all">{typeof window !== 'undefined' ? `${window.location.origin}/api/auth/eve/callback` : 'https://<APP_URL>/api/auth/eve/callback'}</span>
-              <span className="text-slate-500 block text-[9px] mt-1">💡 Нажмите дважды для выделения и скопируйте.</span>
-            </div>
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          className="space-y-3 pt-2 border-t border-slate-800"
+        >
+          <div className="text-xs font-bold text-indigo-400 flex items-center gap-1">
+            <Info className="w-3.5 h-3.5" /> Настройки разработчика EVE Online ESI (SSO)
+          </div>
+          
+          <div className="bg-slate-950/80 rounded-lg p-3 border border-indigo-950 text-slate-300 space-y-1 font-mono text-[11px]">
+            <span className="text-indigo-400 font-bold block text-[9px] uppercase tracking-wider">Callback URL для приложения EVE Portal:</span>
+            <span className="text-emerald-400 font-semibold break-all select-all">{typeof window !== 'undefined' ? `${window.location.origin}/api/auth/eve/callback` : 'https://<APP_URL>/api/auth/eve/callback'}</span>
+            <span className="text-slate-500 block text-[9px] mt-1">💡 Нажмите дважды для выделения и скопируйте.</span>
+          </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                  EVE Client ID
-                </label>
-                <input
-                  type="text"
-                  value={clientId}
-                  onChange={(e) => setClientId(e.target.value)}
-                  placeholder="3c91e779a5..."
-                  className="w-full bg-slate-950/80 border border-slate-800 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono placeholder-slate-700 outline-none"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                  EVE Secret Key
-                </label>
-                <input
-                  type="password"
-                  value={clientSecret}
-                  onChange={(e) => setClientSecret(e.target.value)}
-                  placeholder="••••••••••••••••••••"
-                  className="w-full bg-slate-950/80 border border-slate-800 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono placeholder-slate-700 outline-none"
-                />
-              </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                EVE Client ID
+              </label>
+              <input
+                type="text"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                placeholder="3c91e779a5..."
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono placeholder-slate-700 outline-none"
+              />
             </div>
-          </motion.div>
-        )}
+            <div>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                EVE Secret Key
+              </label>
+              <input
+                type="password"
+                value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+                placeholder="••••••••••••••••••••"
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono placeholder-slate-700 outline-none"
+              />
+            </div>
+          </div>
+        </motion.div>
 
         <button
           type="submit"
