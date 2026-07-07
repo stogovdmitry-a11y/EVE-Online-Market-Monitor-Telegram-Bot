@@ -239,6 +239,95 @@ async function resolveIndividualIds(ids: number[]) {
   await Promise.all(activeResolutions);
 }
 
+// Caches for resolving location and system to region IDs
+const locationRegionCache: { [locationId: string]: number } = {
+  '60003760': 10000002, // Jita IV - Moon 4 - Caldari Navy Assembly Plant -> The Forge
+  '60008494': 10000043, // Amarr VIII (Oris) - Emperor Family Academy -> Domain
+  '60011866': 10000032, // Dodixie IX - Moon 20 - Federation Navy Assembly Plant -> Sinq Laison
+  '60004588': 10000030, // Rens VI - Moon 8 - Brutor Tribe Assembly Plant -> Heimatar
+  '60005686': 10000042, // Hek VIII - Moon 12 - Boundless Creation Factory -> Metropolis
+};
+
+const systemRegionCache: { [systemId: string]: number } = {
+  '30000142': 10000002, // Jita -> The Forge
+  '30002187': 10000043, // Amarr -> Domain
+  '30002659': 10000032, // Dodixie -> Sinq Laison
+  '30002510': 10000030, // Rens -> Heimatar
+  '30002053': 10000042, // Hek -> Metropolis
+};
+
+async function getRegionIdForLocation(locationId: number, accessToken?: string): Promise<number> {
+  const locStr = String(locationId);
+  if (locationRegionCache[locStr]) {
+    return locationRegionCache[locStr];
+  }
+
+  try {
+    if (locationId >= 60000000 && locationId < 64000000) {
+      // NPC Station
+      const res = await fetch(`https://esi.evetech.net/latest/universe/stations/${locationId}/?datasource=tranquility`);
+      if (res.ok) {
+        const data = await res.json() as { system_id: number };
+        if (data && data.system_id) {
+          const regionId = await getRegionIdForSystem(data.system_id);
+          locationRegionCache[locStr] = regionId;
+          return regionId;
+        }
+      }
+    } else if (locationId >= 1000000000000) {
+      // Player-owned Structure (Citadel, Engineering Complex, etc.)
+      if (accessToken) {
+        const res = await fetch(`https://esi.evetech.net/latest/universe/structures/${locationId}/?datasource=tranquility`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (res.ok) {
+          const data = await res.json() as { solar_system_id: number };
+          if (data && data.solar_system_id) {
+            const regionId = await getRegionIdForSystem(data.solar_system_id);
+            locationRegionCache[locStr] = regionId;
+            return regionId;
+          }
+        } else {
+          addLog('warning', `Failed to fetch structure details for ${locationId} from ESI (status ${res.status}). Fallback to standard region.`, 'market');
+        }
+      }
+    }
+  } catch (err) {
+    addLog('warning', `Error resolving region ID for location ${locationId}: ${err instanceof Error ? err.message : String(err)}`, 'market');
+  }
+
+  // Fallback to Jita (The Forge) if we can't determine the region
+  return 10000002;
+}
+
+async function getRegionIdForSystem(systemId: number): Promise<number> {
+  const sysStr = String(systemId);
+  if (systemRegionCache[sysStr]) {
+    return systemRegionCache[sysStr];
+  }
+
+  try {
+    const res = await fetch(`https://esi.evetech.net/latest/universe/systems/${systemId}/?datasource=tranquility`);
+    if (res.ok) {
+      const data = await res.json() as { constellation_id: number };
+      if (data && data.constellation_id) {
+        const constRes = await fetch(`https://esi.evetech.net/latest/universe/constellations/${data.constellation_id}/?datasource=tranquility`);
+        if (constRes.ok) {
+          const constData = await constRes.json() as { region_id: number };
+          if (constData && constData.region_id) {
+            systemRegionCache[sysStr] = constData.region_id;
+            return constData.region_id;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    addLog('warning', `Error resolving region ID for system ${systemId}: ${err instanceof Error ? err.message : String(err)}`, 'market');
+  }
+
+  return 10000002;
+}
+
 // Resolve Name helper using EVE ESI bulk names resolver
 async function resolveNames(ids: number[]): Promise<{ [id: string]: string }> {
   const uniqueIds = Array.from(new Set(ids));
@@ -1027,6 +1116,13 @@ async function performMarketCheck() {
           dbState.orders = dbState.orders.filter(o => o.characterId !== char.id);
           saveDB();
           continue;
+        }
+
+        // Resolve region IDs for locations that don't have it (ESI character orders don't return region_id)
+        for (const co of charOrders) {
+          if (!co.region_id) {
+            co.region_id = await getRegionIdForLocation(co.location_id, accessToken);
+          }
         }
 
         // Collect all EVE universe IDs that need naming resolution
