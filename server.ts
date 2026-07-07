@@ -33,6 +33,100 @@ function getAppUrl(req: any) {
 
 app.use(express.json());
 
+// Middleware to restrict admin APIs and main UI to localhost on external server deployments.
+// In the AI Studio container preview (*.run.app) or localhost/127.0.0.1, we allow access.
+function restrictAdminAccess(req: any, res: any, next: any) {
+  const host = req.get('host') || '';
+  const isLocalhost = host.includes('localhost') || host.includes('127.0.0.1') || host.startsWith('[::1]');
+  const isAiStudio = host.includes('.run.app');
+
+  // If it is localhost or running on AI Studio environment, allow everything
+  if (isLocalhost || isAiStudio) {
+    return next();
+  }
+
+  // On production Ubuntu server accessed via eveonlinebot.duckdns.org / public IP:
+  // We ONLY allow:
+  // 1. EVE SSO routes: /api/auth/eve/login and /api/auth/eve/callback
+  const path = req.path;
+  if (path === '/api/auth/eve/login' || path === '/api/auth/eve/callback') {
+    return next();
+  }
+
+  // If they are visiting the root URL / with ?sso_success=true, we should serve a nice public HTML success page
+  // instead of the full admin React app!
+  if (path === '/' && req.query.sso_success === 'true') {
+    const charName = req.query.char_name || 'Пилот';
+    return res.send(`
+      <html>
+        <head>
+          <title>EVE SSO Authorized</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { background-color: #0d0f14; color: #f1f5f9; font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; }
+            .card { background-color: #1a2130; padding: 32px 24px; border-radius: 16px; border: 1px solid #1e293b; max-width: 400px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4); margin: 16px; }
+            .icon { font-size: 48px; margin-bottom: 16px; color: #10b981; }
+            h3 { color: #f1f5f9; margin-top: 0; font-size: 22px; font-weight: 600; }
+            p { font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 8px 0; }
+            .character { background-color: #0f172a; border: 1px solid #334155; padding: 12px; border-radius: 8px; margin: 16px 0; font-weight: bold; color: #38bdf8; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="icon">🚀</div>
+            <h3>Персонаж успешно добавлен!</h3>
+            <p>EVE Online SSO авторизация пройдена.</p>
+            <div class="character">👤 ${charName}</div>
+            <p>Бот теперь отслеживает рыночные ордера и индустриальные проекты для этого персонажа.</p>
+            <p>Вы можете закрыть эту вкладку и вернуться в Telegram.</p>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+
+  // For any other path, we block or show a public page
+  if (path.startsWith('/api/')) {
+    // Block admin API requests
+    return res.status(403).json({
+      error: 'Access denied',
+      message: 'Administrative APIs are restricted to local connections (localhost) for security. Please use an SSH tunnel.'
+    });
+  }
+
+  // If they visit the root / or any other page, show a beautifully styled public-facing informational page!
+  return res.send(`
+    <html>
+      <head>
+        <title>EVE Online Market Monitor Bot</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          body { background-color: #0d0f14; color: #f1f5f9; font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; }
+          .card { background-color: #1a2130; padding: 32px 24px; border-radius: 16px; border: 1px solid #1e293b; max-width: 450px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4); margin: 16px; }
+          .icon { font-size: 48px; margin-bottom: 16px; }
+          h3 { color: #f1f5f9; margin-top: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.025em; }
+          p { font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 12px 0; }
+          .telegram-badge { display: inline-flex; align-items: center; background-color: #0088cc; color: white; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; margin-top: 16px; transition: background-color 0.2s; }
+          .telegram-badge:hover { background-color: #0077b3; }
+          .security-note { font-size: 12px !important; color: #64748b !important; margin-top: 24px !important; border-top: 1px solid #334155; padding-top: 16px; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="icon">🤖</div>
+          <h3>EVE Online Market Monitor Bot</h3>
+          <p>Этот сервер обеспечивает круглосуточную работу Telegram-бота.</p>
+          <p>Бот отслеживает ваши рыночные ордера в реальном времени, проверяет наличие перебитых цен конкурентами, следит за завершением индустриальных проектов и очередью изучения навыков.</p>
+          <a href="https://t.me/${dbState.settings.botUsername || 'EveMarketMonitorBot'}" class="telegram-badge" target="_blank">Открыть бота в Telegram</a>
+          <p class="security-note">⚠️ Доступ к панели администрирования ограничен локальной сетью (localhost) в целях безопасности вашего бота.</p>
+        </div>
+      </body>
+    </html>
+  `);
+}
+
+app.use(restrictAdminAccess);
+
 // Persistent DB File Path
 const DB_PATH = path.join(process.cwd(), 'db.json');
 
