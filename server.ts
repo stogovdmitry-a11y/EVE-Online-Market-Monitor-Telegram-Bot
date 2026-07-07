@@ -1,6 +1,8 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import dotenv from 'dotenv';
+dotenv.config();
 import { createServer as createViteServer } from 'vite';
 import { Character, Order, BotSettings, BotLog, ChatMessage, IndustryJob } from './src/types';
 
