@@ -8,6 +8,8 @@ const app = express();
 app.set('trust proxy', true);
 const PORT = 3000;
 
+const TELEGRAM_API_BASE = process.env.TELEGRAM_API_BASE ? process.env.TELEGRAM_API_BASE.replace(/\/$/, '') : 'https://api.telegram.org';
+
 let lastKnownAppUrl = process.env.APP_URL ? process.env.APP_URL.replace(/\/$/, '') : '';
 
 function getAppUrl(req: any) {
@@ -1394,7 +1396,7 @@ async function performMarketCheck() {
         }
 
         for (const chatId of chatIds) {
-          const sendUrl = `https://api.telegram.org/bot${telegramToken}/sendMessage`;
+          const sendUrl = `${TELEGRAM_API_BASE}/bot${telegramToken}/sendMessage`;
           const response = await fetch(sendUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1546,7 +1548,7 @@ function formatSkillsForEVE(skills: { name: string; level: number }[]): string {
 }
 
 async function sendTelegramMessage(token: string, chatId: string, text: string) {
-  const sendUrl = `https://api.telegram.org/bot${token}/sendMessage`;
+  const sendUrl = `${TELEGRAM_API_BASE}/bot${token}/sendMessage`;
   try {
     const res = await fetch(sendUrl, {
       method: 'POST',
@@ -1997,7 +1999,7 @@ async function runTelegramPolling() {
   const token = dbState.settings.telegramToken;
   if (!token) return;
 
-  const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${lastUpdateId}&timeout=10`;
+  const url = `${TELEGRAM_API_BASE}/bot${token}/getUpdates?offset=${lastUpdateId}&timeout=10`;
   
   try {
     const response = await fetch(url);
@@ -2016,7 +2018,7 @@ async function runTelegramPolling() {
             const replyText = await processBotMessage(chatId, fromUsername, text);
 
             // Send reply back to user
-            const sendUrl = `https://api.telegram.org/bot${token}/sendMessage`;
+            const sendUrl = `${TELEGRAM_API_BASE}/bot${token}/sendMessage`;
             await fetch(sendUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -2059,7 +2061,7 @@ async function runTelegramPolling() {
 // Register Telegram commands dynamically so they show up in the Telegram app user interface (menu / slash suggestions)
 async function registerBotCommands(token: string) {
   try {
-    const url = `https://api.telegram.org/bot${token}/setMyCommands`;
+    const url = `${TELEGRAM_API_BASE}/bot${token}/setMyCommands`;
     const commands = [
       { command: 'start', description: 'Показать приветствие и список всех команд' },
       { command: 'list', description: 'Показать список персонажей и перебитых ордеров' },
