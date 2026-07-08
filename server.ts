@@ -1098,20 +1098,29 @@ async function performSkillsCheck() {
   }
 }
 
+let isCheckingMarket = false;
+
 // Check EVE Market Orders engine (Actual + Simulated)
 async function performMarketCheck() {
-  addLog('info', 'Market check initiated.', 'market');
-  const { isSimulationMode, telegramToken } = dbState.settings;
+  if (isCheckingMarket) {
+    addLog('info', 'Market check already in progress. Skipping concurrent run.', 'market');
+    return;
+  }
+  isCheckingMarket = true;
 
-  // Track if any orders changed from "best" to "undercut" to trigger bot message
-  const notificationsToSend: {
-    characterName: string;
-    itemName: string;
-    systemName: string;
-    myPrice: number;
-    bestPrice: number;
-    isBuyOrder: boolean;
-  }[] = [];
+  try {
+    addLog('info', 'Market check initiated.', 'market');
+    const { isSimulationMode, telegramToken } = dbState.settings;
+
+    // Track if any orders changed from "best" to "undercut" to trigger bot message
+    const notificationsToSend: {
+      characterName: string;
+      itemName: string;
+      systemName: string;
+      myPrice: number;
+      bestPrice: number;
+      isBuyOrder: boolean;
+    }[] = [];
 
   if (isSimulationMode) {
     // SIMULATION MODE CHECK
@@ -1216,11 +1225,17 @@ async function performMarketCheck() {
           continue;
         }
 
-        // Resolve region IDs for locations that don't have it (ESI character orders don't return region_id)
-        for (const co of charOrders) {
-          if (!co.region_id) {
-            co.region_id = await getRegionIdForLocation(co.location_id, accessToken);
-          }
+        // Resolve region IDs for locations that don't have it (ESI character orders don't return region_id) in batches of 4
+        const regionBatches: any[][] = [];
+        for (let i = 0; i < charOrders.length; i += 4) {
+          regionBatches.push(charOrders.slice(i, i + 4));
+        }
+        for (const batch of regionBatches) {
+          await Promise.all(batch.map(async (co) => {
+            if (!co.region_id) {
+              co.region_id = await getRegionIdForLocation(co.location_id, accessToken);
+            }
+          }));
         }
 
         // Collect all EVE universe IDs that need naming resolution
@@ -1234,129 +1249,144 @@ async function performMarketCheck() {
         });
         await resolveNames(universeIdsToResolve);
 
-        // Process each active character order against public region markets
+        // Process each active character order against public region markets in batches of 4 to avoid network clogging
         const updatedOrders: Order[] = [];
+        const orderBatches: any[][] = [];
+        for (let i = 0; i < charOrders.length; i += 4) {
+          orderBatches.push(charOrders.slice(i, i + 4));
+        }
 
-        for (const co of charOrders) {
-          // Keep track of names
-          const itemName = nameCache[String(co.type_id)] || `Item ${co.type_id}`;
-          const locationName = nameCache[String(co.location_id)] || `Station ${co.location_id}`;
-          
-          const regionId = co.region_id || 10000002;
-          const regionName = nameCache[String(regionId)] || 'The Forge';
-          
-          // Determine friendly solar system / location name from station name prefix or region name
-          let systemName = regionName;
-          if (locationName.startsWith('Jita')) {
-            systemName = 'Jita';
-          } else if (locationName.startsWith('Amarr')) {
-            systemName = 'Amarr';
-          } else if (locationName.startsWith('Dodixie')) {
-            systemName = 'Dodixie';
-          } else if (locationName.startsWith('Rens')) {
-            systemName = 'Rens';
-          } else if (locationName.startsWith('Hek')) {
-            systemName = 'Hek';
-          }
-          
-          const isBuyOrder = !!co.is_buy_order;
+        for (const batch of orderBatches) {
+          await Promise.all(batch.map(async (co) => {
+            // Keep track of names
+            const itemName = nameCache[String(co.type_id)] || `Item ${co.type_id}`;
+            const locationName = nameCache[String(co.location_id)] || `Station ${co.location_id}`;
+            
+            const regionId = co.region_id || 10000002;
+            const regionName = nameCache[String(regionId)] || 'The Forge';
+            
+            // Determine friendly solar system / location name from station name prefix or region name
+            let systemName = regionName;
+            if (locationName.startsWith('Jita')) {
+              systemName = 'Jita';
+            } else if (locationName.startsWith('Amarr')) {
+              systemName = 'Amarr';
+            } else if (locationName.startsWith('Dodixie')) {
+              systemName = 'Dodixie';
+            } else if (locationName.startsWith('Rens')) {
+              systemName = 'Rens';
+            } else if (locationName.startsWith('Hek')) {
+              systemName = 'Hek';
+            }
+            
+            const isBuyOrder = !!co.is_buy_order;
 
-          const marketUrl = `https://esi.evetech.net/latest/markets/${regionId}/orders/?datasource=tranquility&order_type=all&type_id=${co.type_id}`;
-          
-          let bestPrice = co.price;
-          let orderStatus: 'best' | 'undercut' | 'error' = 'best';
+            const marketUrl = `https://esi.evetech.net/latest/markets/${regionId}/orders/?datasource=tranquility&order_type=all&type_id=${co.type_id}`;
+            
+            let bestPrice = co.price;
+            let orderStatus: 'best' | 'undercut' | 'error' = 'best';
 
-          try {
-            const marketRes = await fetch(marketUrl);
-            if (marketRes.ok) {
-              const marketOrders = await marketRes.json() as any[];
-              
-              // Filter orders specifically in the exact same location (NPC station or Upwell structure)
-              const competingOrders = marketOrders.filter(mo => 
-                mo.is_buy_order === isBuyOrder && 
-                mo.location_id === co.location_id &&
-                mo.order_id !== co.order_id // exclude our own order
-              );
+            try {
+              const marketRes = await fetch(marketUrl);
+              if (marketRes.ok) {
+                const marketOrders = await marketRes.json() as any[];
+                
+                // Filter orders specifically in the exact same location (NPC station or Upwell structure)
+                const competingOrders = marketOrders.filter(mo => 
+                  mo.is_buy_order === isBuyOrder && 
+                  mo.location_id === co.location_id &&
+                  mo.order_id !== co.order_id // exclude our own order
+                );
 
-              // Logging and diagnostics for troubleshooting
-              const sameLocationAll = marketOrders.filter(mo => mo.location_id === co.location_id && mo.is_buy_order === isBuyOrder);
-              const isTargetItem = itemName.toLowerCase().includes('remote repair') || itemName.toLowerCase().includes('augmentor') || itemName.toLowerCase().includes('medium');
-              
-              if (isTargetItem) {
-                const topPrices = [...marketOrders]
-                  .filter(mo => mo.is_buy_order === isBuyOrder)
-                  .sort((a, b) => isBuyOrder ? b.price - a.price : a.price - b.price)
-                  .slice(0, 5)
-                  .map(mo => `${mo.price.toLocaleString()} ISK (Loc: ${mo.location_id}, ID: ${mo.order_id}${mo.order_id === co.order_id ? ' [Mine]' : ''})`)
-                  .join(' | ');
+                // Logging and diagnostics for troubleshooting
+                const sameLocationAll = marketOrders.filter(mo => mo.location_id === co.location_id && mo.is_buy_order === isBuyOrder);
+                const isTargetItem = itemName.toLowerCase().includes('remote repair') || itemName.toLowerCase().includes('augmentor') || itemName.toLowerCase().includes('medium');
+                
+                if (isTargetItem) {
+                  const topPrices = [...marketOrders]
+                    .filter(mo => mo.is_buy_order === isBuyOrder)
+                    .sort((a, b) => isBuyOrder ? b.price - a.price : a.price - b.price)
+                    .slice(0, 5)
+                    .map(mo => `${mo.price.toLocaleString()} ISK (Loc: ${mo.location_id}, ID: ${mo.order_id}${mo.order_id === co.order_id ? ' [Mine]' : ''})`)
+                    .join(' | ');
 
-                addLog('info', `[MARKET DEBUG] "${itemName}" checked. Our Price: ${co.price.toLocaleString()} ISK at location ${co.location_id}. Found ${sameLocationAll.length} orders at this location. Top 5 region-wide prices: ${topPrices || 'None'}`, 'market');
-              }
+                  addLog('info', `[MARKET DEBUG] "${itemName}" checked. Our Price: ${co.price.toLocaleString()} ISK at location ${co.location_id}. Found ${sameLocationAll.length} orders at this location. Top 5 region-wide prices: ${topPrices || 'None'}`, 'market');
+                }
 
-              if (isBuyOrder) {
-                // For BUY order, we want our price to be the HIGHEST.
-                // If there's a competing buy order with a higher price, we are undercut!
-                if (competingOrders.length > 0) {
-                  const highestPrice = Math.max(...competingOrders.map(mo => mo.price));
-                  if (highestPrice > co.price) {
-                    bestPrice = highestPrice;
-                    orderStatus = 'undercut';
+                if (isBuyOrder) {
+                  // For BUY order, we want our price to be the HIGHEST.
+                  // If there's a competing buy order with a higher price, we are undercut!
+                  if (competingOrders.length > 0) {
+                    const highestPrice = Math.max(...competingOrders.map(mo => mo.price));
+                    if (highestPrice > co.price) {
+                      bestPrice = highestPrice;
+                      orderStatus = 'undercut';
+                    }
                   }
+                } else {
+                  // For SELL order, we want our price to be the LOWEST.
+                  // If there's a competing sell order with a lower price, we are undercut!
+                  if (competingOrders.length > 0) {
+                    const lowestPrice = Math.min(...competingOrders.map(mo => mo.price));
+                    if (lowestPrice < co.price) {
+                      bestPrice = lowestPrice;
+                      orderStatus = 'undercut';
+                    }
+                  }
+                }
+
+                // Let the user know if their order is indeed undercut
+                if (orderStatus === 'undercut') {
+                  addLog('warning', `Detected undercut for "${itemName}" at ${locationName}! Our price: ${co.price.toLocaleString()} ISK, Best price: ${bestPrice.toLocaleString()} ISK.`, 'market');
                 }
               } else {
-                // For SELL order, we want our price to be the LOWEST.
-                // If there's a competing sell order with a lower price, we are undercut!
-                if (competingOrders.length > 0) {
-                  const lowestPrice = Math.min(...competingOrders.map(mo => mo.price));
-                  if (lowestPrice < co.price) {
-                    bestPrice = lowestPrice;
-                    orderStatus = 'undercut';
-                  }
-                }
+                orderStatus = 'error';
+                addLog('error', `Failed to fetch public market details for ${itemName}: ${marketRes.statusText}`, 'market');
               }
-
-              // Let the user know if their order is indeed undercut
-              if (orderStatus === 'undercut') {
-                addLog('warning', `Detected undercut for "${itemName}" at ${locationName}! Our price: ${co.price.toLocaleString()} ISK, Best price: ${bestPrice.toLocaleString()} ISK.`, 'market');
-              }
-            } else {
+            } catch (mErr) {
+              console.error(`Error checking prices for item ${co.type_id}`, mErr);
               orderStatus = 'error';
-              addLog('error', `Failed to fetch public market details for ${itemName}: ${marketRes.statusText}`, 'market');
             }
-          } catch (mErr) {
-            console.error(`Error checking prices for item ${co.type_id}`, mErr);
-            orderStatus = 'error';
-          }
 
-          // Look up if this order previously existed and was "best" but now "undercut" to trigger notification
-          const previousOrder = dbState.orders.find(o => o.id === String(co.order_id));
-          if (orderStatus === 'undercut' && (!previousOrder || previousOrder.status !== 'undercut')) {
-            notificationsToSend.push({
-               characterName: char.name,
-               itemName,
-               systemName,
-               myPrice: co.price,
-               bestPrice,
-               isBuyOrder: isBuyOrder
+            // Look up if this order previously existed and was "best" but now "undercut" to trigger notification
+            const previousOrder = dbState.orders.find(o => o.id === String(co.order_id));
+            // Trigger notification if:
+            // 1. Order is undercut and wasn't previously undercut
+            // 2. OR order is undercut, and the user modified their price since the last check (they expect to be 'best' but are already undercut)
+            const isNewUndercut = orderStatus === 'undercut' && (
+              !previousOrder || 
+              previousOrder.status !== 'undercut' || 
+              co.price !== previousOrder.price
+            );
+
+            if (isNewUndercut) {
+              notificationsToSend.push({
+                 characterName: char.name,
+                 itemName,
+                 systemName,
+                 myPrice: co.price,
+                 bestPrice,
+                 isBuyOrder: isBuyOrder
+              });
+            }
+
+            updatedOrders.push({
+              id: String(co.order_id),
+              characterId: char.id,
+              characterName: char.name,
+              itemId: String(co.type_id),
+              itemName,
+              isBuyOrder: isBuyOrder,
+              price: co.price,
+              locationId: String(co.location_id),
+              locationName,
+              bestPrice,
+              status: orderStatus,
+              volumeRemain: co.volume_remain,
+              volumeTotal: co.volume_total,
+              lastChecked: new Date().toISOString()
             });
-          }
-
-          updatedOrders.push({
-            id: String(co.order_id),
-            characterId: char.id,
-            characterName: char.name,
-            itemId: String(co.type_id),
-            itemName,
-            isBuyOrder: isBuyOrder,
-            price: co.price,
-            locationId: String(co.location_id),
-            locationName,
-            bestPrice,
-            status: orderStatus,
-            volumeRemain: co.volume_remain,
-            volumeTotal: co.volume_total,
-            lastChecked: new Date().toISOString()
-          });
+          }));
         }
 
         // Clean out simulated or real orders for this character and append updated ones
@@ -1422,11 +1452,16 @@ async function performMarketCheck() {
     }
   }
 
-  // Run the industry projects check as part of the market check cycle
-  await performIndustryCheck();
+    // Run the industry projects check as part of the market check cycle
+    await performIndustryCheck();
 
-  // Run the skills queue check as part of the market check cycle
-  await performSkillsCheck();
+    // Run the skills queue check as part of the market check cycle
+    await performSkillsCheck();
+  } catch (err) {
+    addLog('error', `Error in performMarketCheck: ${err instanceof Error ? err.message : String(err)}`, 'market');
+  } finally {
+    isCheckingMarket = false;
+  }
 }
 
 // Background scheduler
@@ -1444,6 +1479,14 @@ function startCheckScheduler() {
 
 // Start Scheduler
 startCheckScheduler();
+
+// Run immediate check on boot if characters exist
+if (dbState.characters.length > 0) {
+  setTimeout(() => {
+    addLog('info', 'Boot-time market and projects check initiated.', 'system');
+    performMarketCheck();
+  }, 5000);
+}
 
 async function fetchCharacterSkills(char: Character): Promise<{
   totalSp: number;
@@ -1629,7 +1672,7 @@ async function getCharacterSkillsString(char: Character, chatId?: string, isReal
       formData.append('document', blob, `${char.name.replace(/[^a-zA-Z0-9]/g, '_')}_skills.txt`);
       formData.append('caption', `📋 Файл со списком навыков пилота ${char.name} для импорта в EVE Online.`);
       
-      const sendDocUrl = `https://api.telegram.org/bot${token}/sendDocument`;
+      const sendDocUrl = `${TELEGRAM_API_BASE}/bot${token}/sendDocument`;
       const docRes = await fetch(sendDocUrl, {
         method: 'POST',
         body: formData
@@ -2099,6 +2142,13 @@ async function registerBotCommands(token: string) {
 function startTelegramBot() {
   const token = dbState.settings.telegramToken;
   if (token && dbState.settings.isBotRunning) {
+    // Check if we are running in the AI Studio preview environment
+    const isAiStudio = process.env.APP_URL?.includes('.run.app') || process.env.APP_URL?.includes('ai.studio') || process.env.IS_AI_STUDIO === 'true';
+    if (isAiStudio) {
+      addLog('info', 'Telegram bot long polling is disabled in the AI Studio dev container to avoid 409 Conflict with your production bot. You can still test commands via the browser simulator chat below!', 'bot');
+      return;
+    }
+
     addLog('info', `Starting Telegram Bot engine with token: ${token.substring(0, 6)}...`, 'bot');
     if (telegramPollTimeout) {
       clearTimeout(telegramPollTimeout);
