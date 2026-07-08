@@ -43,6 +43,7 @@ export interface Order {
   locationName: string;
   bestPrice: number;
   status: 'best' | 'undercut' | 'checking' | 'error';
+  lastNotifiedPrice?: number;
   volumeRemain: number;
   volumeTotal: number;
   lastChecked: string;

@@ -1129,26 +1129,31 @@ async function performMarketCheck() {
       const shouldFlip = Math.random() < 0.35;
       let newStatus = order.status;
       let newBestPrice = order.bestPrice;
+      let newLastNotifiedPrice = order.lastNotifiedPrice;
 
       if (shouldFlip) {
-        if (order.status === 'best') {
+        if (order.status === 'best' || order.status === 'checking') {
           newStatus = 'undercut';
           // Beaten: Sell price goes lower, Buy price goes higher
           newBestPrice = order.isBuyOrder 
             ? order.price + parseFloat((Math.random() * 0.1 + 0.01).toFixed(2))
             : order.price - parseFloat((Math.random() * 0.1 + 0.01).toFixed(2));
           
-          notificationsToSend.push({
-            characterName: order.characterName,
-            itemName: order.itemName,
-            systemName: 'Jita',
-            myPrice: order.price,
-            bestPrice: newBestPrice,
-            isBuyOrder: order.isBuyOrder
-          });
+          if (order.price !== order.lastNotifiedPrice) {
+            notificationsToSend.push({
+              characterName: order.characterName,
+              itemName: order.itemName,
+              systemName: 'Jita',
+              myPrice: order.price,
+              bestPrice: newBestPrice,
+              isBuyOrder: order.isBuyOrder
+            });
+            newLastNotifiedPrice = order.price;
+          }
         } else {
           newStatus = 'best';
           newBestPrice = order.price;
+          newLastNotifiedPrice = undefined;
         }
       }
 
@@ -1156,6 +1161,7 @@ async function performMarketCheck() {
         ...order,
         status: newStatus,
         bestPrice: newBestPrice,
+        lastNotifiedPrice: newLastNotifiedPrice,
         lastChecked: new Date().toISOString()
       };
     });
@@ -1350,14 +1356,13 @@ async function performMarketCheck() {
 
             // Look up if this order previously existed and was "best" but now "undercut" to trigger notification
             const previousOrder = dbState.orders.find(o => o.id === String(co.order_id));
+            
+            let lastNotifiedPrice = previousOrder?.lastNotifiedPrice;
+
             // Trigger notification if:
-            // 1. Order is undercut and wasn't previously undercut
-            // 2. OR order is undercut, and the user modified their price since the last check (they expect to be 'best' but are already undercut)
-            const isNewUndercut = orderStatus === 'undercut' && (
-              !previousOrder || 
-              previousOrder.status !== 'undercut' || 
-              co.price !== previousOrder.price
-            );
+            // 1. Order is undercut
+            // 2. AND we haven't already notified the user for this specific price (meaning user modified the price or it's a brand new undercut)
+            const isNewUndercut = orderStatus === 'undercut' && co.price !== lastNotifiedPrice;
 
             if (isNewUndercut) {
               notificationsToSend.push({
@@ -1368,6 +1373,11 @@ async function performMarketCheck() {
                  bestPrice,
                  isBuyOrder: isBuyOrder
               });
+              lastNotifiedPrice = co.price;
+            } else if (orderStatus === 'best') {
+              // If the order becomes 'best' again, we clear the last notified price.
+              // This ensures that if it gets undercut again later, even at the same price, they'll get a new alert.
+              lastNotifiedPrice = undefined;
             }
 
             updatedOrders.push({
@@ -1382,6 +1392,7 @@ async function performMarketCheck() {
               locationName,
               bestPrice,
               status: orderStatus,
+              lastNotifiedPrice,
               volumeRemain: co.volume_remain,
               volumeTotal: co.volume_total,
               lastChecked: new Date().toISOString()
@@ -2018,6 +2029,7 @@ async function processBotMessage(chatId: string, username: string, text: string)
       const char = dbState.characters.find(c => c.id === o.characterId);
       if (char && (char as any).chatId === chatId) {
         o.status = 'checking';
+        o.lastNotifiedPrice = undefined;
         resetCount++;
       }
     });
