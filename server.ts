@@ -4,7 +4,20 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 dotenv.config();
 import { createServer as createViteServer } from 'vite';
+import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { Character, Order, BotSettings, BotLog, ChatMessage, IndustryJob } from './src/types';
+
+// Global proxy agent configuration for native fetch (Node.js 18+ uses undici)
+const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+if (proxyUrl) {
+  try {
+    const proxyAgent = new ProxyAgent({ uri: proxyUrl });
+    setGlobalDispatcher(proxyAgent);
+    console.log(`[PROXY] Global fetch proxy configured successfully using: ${proxyUrl}`);
+  } catch (err: any) {
+    console.error(`[PROXY] Failed to configure global fetch proxy:`, err);
+  }
+}
 
 const app = express();
 app.set('trust proxy', true);
@@ -865,7 +878,7 @@ async function performIndustryCheck() {
         if (chatIds.length === 0) continue;
 
         for (const chatId of chatIds) {
-          const sendUrl = `https://api.telegram.org/bot${telegramToken}/sendMessage`;
+          const sendUrl = `${TELEGRAM_API_BASE}/bot${telegramToken}/sendMessage`;
           const response = await fetch(sendUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1073,7 +1086,7 @@ async function performSkillsCheck() {
         if (chatIds.length === 0) continue;
 
         for (const chatId of chatIds) {
-          const sendUrl = `https://api.telegram.org/bot${telegramToken}/sendMessage`;
+          const sendUrl = `${TELEGRAM_API_BASE}/bot${telegramToken}/sendMessage`;
           const response = await fetch(sendUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
