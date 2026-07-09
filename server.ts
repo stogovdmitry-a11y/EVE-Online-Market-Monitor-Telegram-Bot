@@ -586,6 +586,7 @@ async function resolveNames(ids: number[]): Promise<{ [id: string]: string }> {
 
 // Global variable holding the running Telegram long-polling context
 let telegramPollTimeout: NodeJS.Timeout | null = null;
+let activePollAbortController: AbortController | null = null;
 let lastUpdateId = 0;
 let isPollingActive = false;
 
@@ -1871,13 +1872,14 @@ async function processBotMessage(chatId: string, username: string, text: string)
            `Если кто-то перебьет твою цену, проект завершится или изучится навык, я моментально пришлю тебе оповещение!\n\n` +
            `📋 *Доступные команды:*\n` +
            `🔹 /start - показать это меню и список всех команд\n` +
-           `🔹 /add_character - добавить нового персонажа через EVE SSO\n` +
+           `🔹 /addcharacter - добавить нового персонажа через EVE SSO\n` +
            `🔹 /list (или /characters) - показать список персонажей и перебитых ордеров\n` +
            `🔹 /projects - показать активные индустриальные проекты\n` +
-           `🔹 /projects on (или /projects_off) - включить/выключить оповещения о проектах\n` +
+           `🔹 /projects on (или /projectsoff) - включить/выключить оповещения о проектах\n` +
            `🔹 /skills [персонаж] - получить полный список изученных навыков и файл для игры\n` +
-           `🔹 /skills on (или /skills_off) - включить/выключить оповещения о навыках\n` +
-           `🔹 /delete_character <ID> - удалить персонажа по ID\n` +
+           `🔹 /skills on (или /skillsoff) - включить/выключить оповещения о навыках\n` +
+           `🔹 /deletecharacter <ID> - удалить персонажа по ID\n` +
+           `🔹 /stats - показать общую статистику использования бота\n` +
            `🔹 /check - принудительно запустить проверку цен, проектов и навыков`;
   }
 
@@ -2160,6 +2162,29 @@ async function processBotMessage(chatId: string, username: string, text: string)
            `Если будут найдены перебитые ордера или завершенные проекты, я сразу пришлю оповещения!`;
   }
 
+  if (command === '/stats') {
+    const realChars = dbState.characters.filter(c => !c.isSimulated);
+    const uniqueChats = new Set(
+      realChars
+        .map(c => (c as any).chatId)
+        .filter(cid => cid && !cid.startsWith('simulation_user') && !cid.startsWith('web_user') && cid !== '123456789' && cid !== 'unknown_web_user')
+    );
+    const totalOrders = dbState.orders.filter(o => {
+      const char = dbState.characters.find(c => c.id === o.characterId);
+      return char && !char.isSimulated;
+    }).length;
+    const totalProjects = dbState.projects.filter(p => {
+      const char = dbState.characters.find(c => c.id === p.characterId);
+      return char && !char.isSimulated;
+    }).length;
+
+    return `📊 *Статистика использования бота:*\n\n` +
+           `👤 Всего реальных пилотов добавлено: *${realChars.length}*\n` +
+           `💬 Уникальных Telegram пользователей: *${uniqueChats.size}*\n` +
+           `📦 Ордеров на мониторинге: *${totalOrders}*\n` +
+           `🏭 Индустриальных проектов: *${totalProjects}*`;
+  }
+
   // Fallback / Unknown command
   return `❓ *Неизвестная команда!*\n\nЯ не знаю команду \`${command}\`.\nИспользуй /start для вывода списка всех доступных команд.`;
 }
@@ -2174,13 +2199,31 @@ async function runTelegramPolling() {
   }
   isPollingActive = true;
 
+  // Abort any previously hanging long poll fetch to prevent parallel/overlapping getUpdates calls
+  if (activePollAbortController) {
+    try {
+      activePollAbortController.abort();
+    } catch (e) {}
+  }
+  activePollAbortController = new AbortController();
+  const controller = activePollAbortController;
+
   // Use a proper long poll timeout of 20 seconds. Telegram will keep the request open
   // and resolve it instantly when an update/message arrives, resulting in near 0ms delay!
   const url = `${TELEGRAM_API_BASE}/bot${token}/getUpdates?offset=${lastUpdateId}&timeout=20`;
   let delayMs = 100; // instant loop default for real-time responsiveness
 
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, 35000);
+
   try {
-    const response = await fetch(url);
+    // Disable HTTP keep-alive with Connection: close to avoid stale/dead socket pool accumulation
+    const response = await fetch(url, { 
+      signal: controller.signal,
+      headers: { 'Connection': 'close' }
+    });
+    clearTimeout(timeoutId);
     isPollingActive = false;
 
     if (response.ok) {
@@ -2201,7 +2244,10 @@ async function runTelegramPolling() {
             const sendUrl = `${TELEGRAM_API_BASE}/bot${token}/sendMessage`;
             await fetch(sendUrl, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 
+                'Content-Type': 'application/json',
+                'Connection': 'close'
+              },
               body: JSON.stringify({
                 chat_id: chatId,
                 text: replyText,
@@ -2216,8 +2262,8 @@ async function runTelegramPolling() {
       
       if (response.status === 409) {
         addLog('warning', `Telegram longpoll returned 409 Conflict (overlapping instance detected). Retrying in 15 seconds...`, 'bot');
-        // Do not disable bot in DB! Just schedule a retry in 15 seconds if bot is still supposed to run
-        if (dbState.settings.isBotRunning && dbState.settings.telegramToken === token) {
+        // Do not disable bot in DB! Just schedule a retry in 15 seconds if bot is still supposed to run and not aborted
+        if (dbState.settings.isBotRunning && dbState.settings.telegramToken === token && !controller.signal.aborted) {
           telegramPollTimeout = setTimeout(runTelegramPolling, 15000);
         }
         return;
@@ -2229,10 +2275,15 @@ async function runTelegramPolling() {
       return; // Stop polling on bad token
     }
   } catch (err: any) {
+    clearTimeout(timeoutId);
     isPollingActive = false;
-    const isNetworkError = err.message?.includes('fetch failed') || err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET' || err.toString().includes('fetch failed');
+    const isAbort = err.name === 'AbortError' || controller.signal.aborted;
+    const isNetworkError = err.message?.includes('fetch failed') || err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET' || err.toString().includes('fetch failed') || isAbort;
+    
     if (isNetworkError) {
-      console.warn(`[BOT - WARNING] Telegram polling connection issue (will retry): ${err.message || err}`);
+      if (!isAbort) {
+        console.warn(`[BOT - WARNING] Telegram polling connection issue (will retry): ${err.message || err}`);
+      }
     } else {
       console.error('Telegram polling loop error:', err);
     }
@@ -2240,8 +2291,8 @@ async function runTelegramPolling() {
     delayMs = 5000;
   }
 
-  // Continue polling if bot is still enabled
-  if (dbState.settings.isBotRunning && dbState.settings.telegramToken === token) {
+  // Continue polling if bot is still enabled and we were not explicitly aborted/replaced
+  if (dbState.settings.isBotRunning && dbState.settings.telegramToken === token && !controller.signal.aborted) {
     telegramPollTimeout = setTimeout(runTelegramPolling, delayMs);
   }
 }
@@ -2254,13 +2305,12 @@ async function registerBotCommands(token: string) {
       { command: 'start', description: 'Показать приветствие и список всех команд' },
       { command: 'list', description: 'Показать список персонажей и перебитых ордеров' },
       { command: 'projects', description: 'Показать активные индустриальные проекты' },
-      { command: 'projects_on', description: 'Включить авто-уведомления по проектам' },
-      { command: 'projects_off', description: 'Выключить авто-уведомления по проектам' },
+      { command: 'projectsoff', description: 'Выключить авто-уведомления по проектам' },
       { command: 'skills', description: 'Показать навыки и очередь изучения персонажа' },
-      { command: 'skills_on', description: 'Включить авто-уведомления по навыкам' },
-      { command: 'skills_off', description: 'Выключить авто-уведомления по навыкам' },
-      { command: 'add_character', description: 'Добавить нового персонажа через EVE SSO' },
-      { command: 'delete_character', description: 'Удалить привязанного персонажа по ID' },
+      { command: 'skillsoff', description: 'Выключить авто-уведомления по навыкам' },
+      { command: 'addcharacter', description: 'Добавить нового персонажа через EVE SSO' },
+      { command: 'deletecharacter', description: 'Удалить привязанного персонажа по ID' },
+      { command: 'stats', description: 'Показать общую статистику использования бота' },
       { command: 'check', description: 'Запустить принудительную проверку ордеров и проектов' }
     ];
 
@@ -2297,6 +2347,15 @@ async function startTelegramBot() {
     }
 
     addLog('info', `Starting Telegram Bot engine with token: ${token.substring(0, 6)}...`, 'bot');
+
+    // Abort any active HTTP long poll requests to prevent parallel overlapping fetch loops!
+    if (activePollAbortController) {
+      try {
+        activePollAbortController.abort();
+      } catch (e) {}
+      activePollAbortController = null;
+    }
+
     isPollingActive = false; // Reset lock on manual start
     if (telegramPollTimeout) {
       clearTimeout(telegramPollTimeout);
