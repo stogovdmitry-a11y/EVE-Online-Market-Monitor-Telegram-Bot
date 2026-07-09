@@ -57,16 +57,82 @@ function getAppUrl(req: any) {
 
 app.use(express.json());
 
+// Helper to detect if an address belongs to localhost or a private local network (LAN / RFC 1918 / IPv6 local)
+function isLocalAddress(addr: string): boolean {
+  if (!addr) return false;
+  
+  let clean = addr.split(':')[0].replace(/[\[\]]/g, '').trim().toLowerCase();
+  
+  // Strip IPv4-mapped IPv6 prefix (::ffff:)
+  if (clean.startsWith('::ffff:')) {
+    clean = clean.substring(7);
+  }
+  
+  if (clean === 'localhost' || clean === '127.0.0.1' || clean === '::1') {
+    return true;
+  }
+  
+  // Check IPv4 Private / Loopback / Link-Local ranges
+  const ipv4Match = clean.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (ipv4Match) {
+    const o1 = parseInt(ipv4Match[1], 10);
+    const o2 = parseInt(ipv4Match[2], 10);
+    // 10.0.0.0/8
+    if (o1 === 10) return true;
+    // 192.168.0.0/16
+    if (o1 === 192 && o2 === 168) return true;
+    // 169.254.0.0/16 (Link-local)
+    if (o1 === 169 && o2 === 254) return true;
+    // 172.16.0.0/12
+    if (o1 === 172 && o2 >= 16 && o2 <= 31) return true;
+    // 127.0.0.0/8 (Loopback)
+    if (o1 === 127) return true;
+  }
+  
+  // Check IPv6 Private/Local ranges
+  // - Unique Local Address (ULA): fc00::/7 (starts with fc or fd)
+  // - Link-Local Address: fe80::/10 (starts with fe8, fe9, fea, feb)
+  if (
+    clean.startsWith('fe8') || 
+    clean.startsWith('fe9') || 
+    clean.startsWith('fea') || 
+    clean.startsWith('feb') || 
+    clean.startsWith('fc') || 
+    clean.startsWith('fd')
+  ) {
+    return true;
+  }
+  
+  // Local domains
+  if (clean.endsWith('.local')) {
+    return true;
+  }
+  
+  return false;
+}
+
 // Middleware to restrict admin APIs and main UI to localhost on external server deployments.
 // In the AI Studio container preview (*.run.app) or localhost/127.0.0.1, we allow access.
 function restrictAdminAccess(req: any, res: any, next: any) {
   const host = req.get('host') || '';
-  const isLocalhost = host.includes('localhost') || host.includes('127.0.0.1') || host.startsWith('[::1]');
+  const clientIp = req.ip || '';
+  const remoteAddr = req.socket?.remoteAddress || '';
+  const forwardedFor = req.headers['x-forwarded-for'];
+
+  const addressesToCheck: string[] = [host, clientIp, remoteAddr];
+  if (typeof forwardedFor === 'string') {
+    addressesToCheck.push(...forwardedFor.split(','));
+  } else if (Array.isArray(forwardedFor)) {
+    addressesToCheck.push(...forwardedFor);
+  }
+
+  // Check if any of the associated addresses is a local/private network address
+  const isLocal = addressesToCheck.some(addr => isLocalAddress(addr));
   const isAiStudio = host.includes('.run.app');
   const allowPublicAdmin = process.env.ALLOW_PUBLIC_ADMIN === 'true';
 
-  // If it is localhost, running on AI Studio environment, or explicitly allowed publicly, allow everything
-  if (isLocalhost || isAiStudio || allowPublicAdmin) {
+  // If it is localhost/local network, running on AI Studio environment, or explicitly allowed publicly, allow everything
+  if (isLocal || isAiStudio || allowPublicAdmin) {
     return next();
   }
 
