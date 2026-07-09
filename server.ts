@@ -2180,9 +2180,10 @@ async function startTelegramBot() {
   const token = dbState.settings.telegramToken;
   if (token && dbState.settings.isBotRunning) {
     // Check if we are running in the AI Studio preview environment
-    const isAiStudio = process.env.APP_URL?.includes('.run.app') || process.env.APP_URL?.includes('ai.studio') || process.env.IS_AI_STUDIO === 'true';
+    const forcePolling = process.env.FORCE_TELEGRAM_POLLING === 'true';
+    const isAiStudio = !forcePolling && (process.env.APP_URL?.includes('.run.app') || process.env.APP_URL?.includes('ai.studio') || process.env.IS_AI_STUDIO === 'true');
     if (isAiStudio) {
-      addLog('info', 'Telegram bot long polling is disabled in the AI Studio dev container to avoid 409 Conflict with your production bot. You can still test commands via the browser simulator chat below!', 'bot');
+      addLog('info', 'Telegram bot long polling is disabled in the AI Studio dev container to avoid 409 Conflict with your production bot. You can still test commands via the browser simulator chat below! (To force-enable polling on your production VPS, set FORCE_TELEGRAM_POLLING=true in your .env file)', 'bot');
       return;
     }
 
