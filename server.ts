@@ -35,6 +35,13 @@ const TELEGRAM_API_BASE = process.env.TELEGRAM_API_BASE ? process.env.TELEGRAM_A
 let lastKnownAppUrl = process.env.APP_URL ? process.env.APP_URL.replace(/\/$/, '') : '';
 
 function getAppUrl(req: any) {
+  if (process.env.APP_URL) {
+    const envUrl = process.env.APP_URL.replace(/\/$/, '');
+    if (!lastKnownAppUrl) {
+      lastKnownAppUrl = envUrl;
+    }
+    return envUrl;
+  }
   let proto = req.protocol;
   if (req.headers['x-forwarded-proto'] === 'https' || req.get('host')?.includes('.run.app')) {
     proto = 'https';
@@ -44,13 +51,6 @@ function getAppUrl(req: any) {
     const detectedUrl = `${proto}://${host}`;
     lastKnownAppUrl = detectedUrl;
     return detectedUrl;
-  }
-  if (process.env.APP_URL) {
-    const envUrl = process.env.APP_URL.replace(/\/$/, '');
-    if (!lastKnownAppUrl) {
-      lastKnownAppUrl = envUrl;
-    }
-    return envUrl;
   }
   return 'http://localhost:3000';
 }
@@ -570,6 +570,7 @@ async function resolveNames(ids: number[]): Promise<{ [id: string]: string }> {
 // Global variable holding the running Telegram long-polling context
 let telegramPollTimeout: NodeJS.Timeout | null = null;
 let lastUpdateId = 0;
+let isPollingActive = false;
 
 // EVE ESI SSO exchange helper
 async function exchangeAuthorizationCode(code: string, clientId: string, clientSecret: string, redirectUri: string) {
@@ -2143,10 +2144,20 @@ async function runTelegramPolling() {
   const token = dbState.settings.telegramToken;
   if (!token) return;
 
-  const url = `${TELEGRAM_API_BASE}/bot${token}/getUpdates?offset=${lastUpdateId}&timeout=0`;
-  
+  if (isPollingActive) {
+    return;
+  }
+  isPollingActive = true;
+
+  // Use a proper long poll timeout of 20 seconds. Telegram will keep the request open
+  // and resolve it instantly when an update/message arrives, resulting in near 0ms delay!
+  const url = `${TELEGRAM_API_BASE}/bot${token}/getUpdates?offset=${lastUpdateId}&timeout=20`;
+  let delayMs = 100; // instant loop default for real-time responsiveness
+
   try {
     const response = await fetch(url);
+    isPollingActive = false;
+
     if (response.ok) {
       const data = await response.json() as any;
       if (data.ok && data.result) {
@@ -2193,17 +2204,20 @@ async function runTelegramPolling() {
       return; // Stop polling on bad token
     }
   } catch (err: any) {
+    isPollingActive = false;
     const isNetworkError = err.message?.includes('fetch failed') || err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET' || err.toString().includes('fetch failed');
     if (isNetworkError) {
       console.warn(`[BOT - WARNING] Telegram polling connection issue (will retry): ${err.message || err}`);
     } else {
       console.error('Telegram polling loop error:', err);
     }
+    // If we have a network error, back off for 5 seconds to avoid tight infinite loops
+    delayMs = 5000;
   }
 
   // Continue polling if bot is still enabled
   if (dbState.settings.isBotRunning && dbState.settings.telegramToken === token) {
-    telegramPollTimeout = setTimeout(runTelegramPolling, 1500);
+    telegramPollTimeout = setTimeout(runTelegramPolling, delayMs);
   }
 }
 
@@ -2258,6 +2272,7 @@ async function startTelegramBot() {
     }
 
     addLog('info', `Starting Telegram Bot engine with token: ${token.substring(0, 6)}...`, 'bot');
+    isPollingActive = false; // Reset lock on manual start
     if (telegramPollTimeout) {
       clearTimeout(telegramPollTimeout);
     }
@@ -2280,6 +2295,7 @@ async function startTelegramBot() {
     registerBotCommands(token);
     runTelegramPolling();
   } else {
+    isPollingActive = false;
     if (telegramPollTimeout) {
       clearTimeout(telegramPollTimeout);
       telegramPollTimeout = null;
