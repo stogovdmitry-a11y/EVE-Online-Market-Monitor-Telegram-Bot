@@ -2069,7 +2069,7 @@ async function runTelegramPolling() {
   const token = dbState.settings.telegramToken;
   if (!token) return;
 
-  const url = `${TELEGRAM_API_BASE}/bot${token}/getUpdates?offset=${lastUpdateId}&timeout=10`;
+  const url = `${TELEGRAM_API_BASE}/bot${token}/getUpdates?offset=${lastUpdateId}&timeout=0`;
   
   try {
     const response = await fetch(url);
@@ -2118,8 +2118,13 @@ async function runTelegramPolling() {
       saveDB();
       return; // Stop polling on bad token
     }
-  } catch (err) {
-    console.error('Telegram polling loop error:', err);
+  } catch (err: any) {
+    const isNetworkError = err.message?.includes('fetch failed') || err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET' || err.toString().includes('fetch failed');
+    if (isNetworkError) {
+      console.warn(`[BOT - WARNING] Telegram polling connection issue (will retry): ${err.message || err}`);
+    } else {
+      console.error('Telegram polling loop error:', err);
+    }
   }
 
   // Continue polling if bot is still enabled
