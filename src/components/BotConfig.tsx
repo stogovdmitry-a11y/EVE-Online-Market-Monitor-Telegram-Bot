@@ -14,6 +14,7 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
   const [interval, setInterval] = useState(settings.intervalMinutes);
   const [clientId, setClientId] = useState(settings.eveClientId || '');
   const [clientSecret, setClientSecret] = useState(settings.eveClientSecret || '');
+  const [callbackUrl, setCallbackUrl] = useState(settings.eveCallbackUrl || '');
   const [industryEnabled, setIndustryEnabled] = useState(settings.industryNotificationsEnabled !== false);
   const [skillsEnabled, setSkillsEnabled] = useState(settings.skillsNotificationsEnabled !== false);
   const [showHelp, setShowHelp] = useState(false);
@@ -26,6 +27,7 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
       isSimulationMode: false,
       eveClientId: clientId,
       eveClientSecret: clientSecret,
+      eveCallbackUrl: callbackUrl,
       industryNotificationsEnabled: industryEnabled,
       skillsNotificationsEnabled: skillsEnabled
     });
@@ -220,6 +222,22 @@ export default function BotConfig({ settings, onSaveSettings, isSaving }: BotCon
                 className="w-full bg-slate-950/80 border border-slate-800 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono placeholder-slate-700 outline-none"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+              Свой EVE Callback URL (Опционально)
+            </label>
+            <input
+              type="text"
+              value={callbackUrl}
+              onChange={(e) => setCallbackUrl(e.target.value)}
+              placeholder="https://eveonlinebot.duckdns.org/auth/callback"
+              className="w-full bg-slate-950/80 border border-slate-800 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono placeholder-slate-700 outline-none"
+            />
+            <span className="text-[10px] text-slate-500 block mt-1">
+              Укажите его, если зарегистрировали в кабинете разработчиков CCP кастомный Callback URL (например, <code className="text-indigo-400 select-all">https://eveonlinebot.duckdns.org/auth/callback</code>). По умолчанию используется стандартный путь <code className="text-slate-400">/api/auth/eve/callback</code>.
+            </span>
           </div>
         </motion.div>
 

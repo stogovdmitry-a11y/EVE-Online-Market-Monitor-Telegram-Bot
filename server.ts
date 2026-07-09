@@ -55,6 +55,23 @@ function getAppUrl(req: any) {
   return 'http://localhost:3000';
 }
 
+function getEveRedirectUri(req?: any) {
+  if (dbState && dbState.settings && dbState.settings.eveCallbackUrl) {
+    return dbState.settings.eveCallbackUrl;
+  }
+  if (process.env.EVE_CALLBACK_URL) {
+    return process.env.EVE_CALLBACK_URL;
+  }
+  const appUrl = req ? getAppUrl(req) : (lastKnownAppUrl || process.env.APP_URL || 'http://localhost:3000');
+  
+  // If the current request path is /auth/callback, let's match it
+  if (req && req.path === '/auth/callback') {
+    return `${appUrl}/auth/callback`;
+  }
+  
+  return `${appUrl}/api/auth/eve/callback`;
+}
+
 app.use(express.json());
 
 // Helper to detect if an address belongs to localhost or a private local network (LAN / RFC 1918 / IPv6 local)
@@ -138,9 +155,9 @@ function restrictAdminAccess(req: any, res: any, next: any) {
 
   // On production Ubuntu server accessed via eveonlinebot.duckdns.org / public IP:
   // We ONLY allow:
-  // 1. EVE SSO routes: /api/auth/eve/login and /api/auth/eve/callback
+  // 1. EVE SSO routes: /api/auth/eve/login, /api/auth/eve/callback, and /auth/callback
   const path = req.path;
-  if (path === '/api/auth/eve/login' || path === '/api/auth/eve/callback') {
+  if (path === '/api/auth/eve/login' || path === '/api/auth/eve/callback' || path === '/auth/callback') {
     return next();
   }
 
@@ -1858,10 +1875,10 @@ async function processBotMessage(chatId: string, username: string, text: string)
 
   if (command === '/add_character') {
     // Generate actual EVE SSO URL with both market, industry, and skills scopes
-    const appUrl = lastKnownAppUrl || process.env.APP_URL || `http://localhost:3000`;
     const clientId = dbState.settings.eveClientId || process.env.EVE_CLIENT_ID || 'MOCK_CLIENT_ID';
+    const redirectUri = getEveRedirectUri();
     const scopes = 'esi-markets.read_character_orders.v1 esi-industry.read_character_jobs.v1 esi-industry.read_corporation_jobs.v1 esi-skills.read_skills.v1 esi-skills.read_skillqueue.v1';
-    const ssoUrl = `https://login.eveonline.com/v2/oauth/authorize/?response_type=code&redirect_uri=${encodeURIComponent(appUrl + '/api/auth/eve/callback')}&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&state=${chatId}`;
+    const ssoUrl = `https://login.eveonline.com/v2/oauth/authorize/?response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&state=${chatId}`;
 
     return `👤 *Добавление персонажа:*\n\n` +
            `Чтобы добавить персонажа, тебе нужно авторизовать его через официальный безопасный EVE SSO (Single Sign-On).\n\n` +
@@ -2354,7 +2371,7 @@ app.get('/api/skills/export/:characterId', async (req, res) => {
 
 // Update Settings
 app.post('/api/settings', (req, res) => {
-  const { telegramToken, intervalMinutes, isSimulationMode, eveClientId, eveClientSecret, industryNotificationsEnabled } = req.body;
+  const { telegramToken, intervalMinutes, isSimulationMode, eveClientId, eveClientSecret, eveCallbackUrl, industryNotificationsEnabled } = req.body;
 
   const oldToken = dbState.settings.telegramToken;
   const oldRunning = dbState.settings.isBotRunning;
@@ -2365,6 +2382,7 @@ app.post('/api/settings', (req, res) => {
   
   if (eveClientId !== undefined) dbState.settings.eveClientId = eveClientId.trim();
   if (eveClientSecret !== undefined) dbState.settings.eveClientSecret = eveClientSecret.trim();
+  if (eveCallbackUrl !== undefined) dbState.settings.eveCallbackUrl = eveCallbackUrl.trim();
   if (industryNotificationsEnabled !== undefined) dbState.settings.industryNotificationsEnabled = Boolean(industryNotificationsEnabled);
 
   // If a Telegram Token is newly provided or removed, toggle run state
@@ -2513,7 +2531,6 @@ app.post('/api/chat/send', async (req, res) => {
 
 // EVE Login Redirect Link Generator
 app.get('/api/auth/eve/login', (req, res) => {
-  const appUrl = getAppUrl(req);
   const clientId = dbState.settings.eveClientId || process.env.EVE_CLIENT_ID;
   const userTelegramChatId = (req.query.chatId as string) || 'unknown_web_user';
 
@@ -2521,15 +2538,15 @@ app.get('/api/auth/eve/login', (req, res) => {
     return res.status(400).send('EVE SSO Client ID is not configured in settings or environment variables.');
   }
 
+  const redirectUri = getEveRedirectUri(req);
   const scopes = 'esi-markets.read_character_orders.v1 esi-industry.read_character_jobs.v1 esi-industry.read_corporation_jobs.v1 esi-skills.read_skills.v1 esi-skills.read_skillqueue.v1';
-  const ssoUrl = `https://login.eveonline.com/v2/oauth/authorize/?response_type=code&redirect_uri=${encodeURIComponent(appUrl + '/api/auth/eve/callback')}&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&state=${userTelegramChatId}`;
+  const ssoUrl = `https://login.eveonline.com/v2/oauth/authorize/?response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&state=${userTelegramChatId}`;
   res.redirect(ssoUrl);
 });
 
-// EVE SSO Callback handler
-app.get('/api/auth/eve/callback', async (req, res) => {
+// EVE SSO Callback handler - listens to BOTH /api/auth/eve/callback AND /auth/callback
+app.get(['/api/auth/eve/callback', '/auth/callback'], async (req, res) => {
   const { code, state } = req.query; // state holds the telegram chatId if triggered from Telegram
-  const appUrl = getAppUrl(req);
   const clientId = dbState.settings.eveClientId || process.env.EVE_CLIENT_ID;
   const clientSecret = dbState.settings.eveClientSecret || process.env.EVE_CLIENT_SECRET;
 
@@ -2615,11 +2632,12 @@ app.get('/api/auth/eve/callback', async (req, res) => {
     }
 
     // Exchange actual OAuth code for Access + Refresh Tokens
+    const redirectUri = getEveRedirectUri(req);
     const tokenResponse = await exchangeAuthorizationCode(
       String(code),
       clientId,
       clientSecret,
-      appUrl + '/api/auth/eve/callback'
+      redirectUri
     );
 
     // Verify token to get EVE Character ID and Name
