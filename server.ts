@@ -2178,10 +2178,13 @@ async function registerBotCommands(token: string) {
 // Control starting/stopping of Telegram Polling Engine
 async function startTelegramBot() {
   const token = dbState.settings.telegramToken;
+  console.log(`[BOT] startTelegramBot called. Token length: ${token ? token.length : 0}, isBotRunning: ${dbState.settings.isBotRunning}`);
+
   if (token && dbState.settings.isBotRunning) {
-    // Check if we are running in the AI Studio preview environment
+    // Check if we are running in the AI Studio preview environment (dev sandbox)
     const forcePolling = process.env.FORCE_TELEGRAM_POLLING === 'true';
-    const isAiStudio = !forcePolling && (process.env.APP_URL?.includes('.run.app') || process.env.APP_URL?.includes('ai.studio') || process.env.IS_AI_STUDIO === 'true');
+    const isAiStudio = !forcePolling && (process.env.IS_AI_STUDIO === 'true' && process.env.NODE_ENV !== 'production');
+    
     if (isAiStudio) {
       addLog('info', 'Telegram bot long polling is disabled in the AI Studio dev container to avoid 409 Conflict with your production bot. You can still test commands via the browser simulator chat below! (To force-enable polling on your production VPS, set FORCE_TELEGRAM_POLLING=true in your .env file)', 'bot');
       return;
@@ -2219,6 +2222,11 @@ async function startTelegramBot() {
 }
 
 // Initial bot startup
+if (dbState.settings.telegramToken) {
+  dbState.settings.isBotRunning = true;
+  saveDB();
+}
+
 if (dbState.settings.isBotRunning) {
   startTelegramBot();
 }
@@ -2287,10 +2295,8 @@ app.post('/api/settings', (req, res) => {
 
   addLog('success', `Settings updated. Simulation: ${dbState.settings.isSimulationMode ? 'ON' : 'OFF'}. Bot active: ${dbState.settings.isBotRunning ? 'YES' : 'NO'}.`, 'system');
 
-  // Trigger bot startup/restart if token or state changes
-  if (oldToken !== dbState.settings.telegramToken || oldRunning !== dbState.settings.isBotRunning) {
-    startTelegramBot();
-  }
+  // Trigger bot startup/restart (force restart to apply any setting changes instantly)
+  startTelegramBot();
 
   // Trigger check scheduler update
   startCheckScheduler();
