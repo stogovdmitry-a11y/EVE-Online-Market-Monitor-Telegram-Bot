@@ -63,9 +63,10 @@ function restrictAdminAccess(req: any, res: any, next: any) {
   const host = req.get('host') || '';
   const isLocalhost = host.includes('localhost') || host.includes('127.0.0.1') || host.startsWith('[::1]');
   const isAiStudio = host.includes('.run.app');
+  const allowPublicAdmin = process.env.ALLOW_PUBLIC_ADMIN === 'true';
 
-  // If it is localhost or running on AI Studio environment, allow everything
-  if (isLocalhost || isAiStudio) {
+  // If it is localhost, running on AI Studio environment, or explicitly allowed publicly, allow everything
+  if (isLocalhost || isAiStudio || allowPublicAdmin) {
     return next();
   }
 
