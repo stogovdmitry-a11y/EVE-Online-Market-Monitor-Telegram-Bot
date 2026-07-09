@@ -1835,10 +1835,18 @@ async function getCharacterSkillsString(char: Character, chatId?: string, isReal
 // Shared Command processing logic (used for both real Telegram API AND browser simulator!)
 async function processBotMessage(chatId: string, username: string, text: string): Promise<string> {
   const cleanText = text.trim();
-  const command = cleanText.split(' ')[0].toLowerCase();
+  let command = cleanText.split(' ')[0].toLowerCase();
   const args = cleanText.split(' ').slice(1);
 
-  addLog('info', `Received command: "${cleanText}" from chatID: ${chatId} (${username})`, 'bot');
+  // Normalize commands (support both with and without underscores)
+  if (command === '/addcharacter') command = '/add_character';
+  if (command === '/deletecharacter') command = '/delete_character';
+  if (command === '/projectsoff') command = '/projects_off';
+  if (command === '/projectson') command = '/projects_on';
+  if (command === '/skillsoff') command = '/skills_off';
+  if (command === '/skillson') command = '/skills_on';
+
+  addLog('info', `Received command: "${cleanText}" (mapped to "${command}") from chatID: ${chatId} (${username})`, 'bot');
 
   // Automatically link any web-initiated characters to this real Telegram chatId when they interact with the bot!
   const isRealTelegram = chatId && !chatId.startsWith('simulation_user') && !chatId.startsWith('web_user') && chatId !== '123456789';
