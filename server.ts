@@ -4,19 +4,26 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 dotenv.config();
 import { createServer as createViteServer } from 'vite';
-import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { Character, Order, BotSettings, BotLog, ChatMessage, IndustryJob } from './src/types';
 
 // Global proxy agent configuration for native fetch (Node.js 18+ uses undici)
 const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
 if (proxyUrl) {
-  try {
-    const proxyAgent = new ProxyAgent({ uri: proxyUrl });
-    setGlobalDispatcher(proxyAgent);
-    console.log(`[PROXY] Global fetch proxy configured successfully using: ${proxyUrl}`);
-  } catch (err: any) {
-    console.error(`[PROXY] Failed to configure global fetch proxy:`, err);
-  }
+  // Dynamically load undici only when proxy is actually required.
+  // This prevents startup crashes due to Node/undici version conflicts for users not using a proxy.
+  import('undici')
+    .then(({ ProxyAgent, setGlobalDispatcher }) => {
+      try {
+        const proxyAgent = new ProxyAgent({ uri: proxyUrl });
+        setGlobalDispatcher(proxyAgent);
+        console.log(`[PROXY] Global fetch proxy configured successfully using: ${proxyUrl}`);
+      } catch (err: any) {
+        console.error(`[PROXY] Failed to configure global fetch proxy:`, err);
+      }
+    })
+    .catch((err) => {
+      console.error(`[PROXY] Failed to load undici package for proxy configuration:`, err);
+    });
 }
 
 const app = express();
