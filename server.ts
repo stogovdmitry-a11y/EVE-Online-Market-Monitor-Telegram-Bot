@@ -2176,7 +2176,7 @@ async function registerBotCommands(token: string) {
 }
 
 // Control starting/stopping of Telegram Polling Engine
-function startTelegramBot() {
+async function startTelegramBot() {
   const token = dbState.settings.telegramToken;
   if (token && dbState.settings.isBotRunning) {
     // Check if we are running in the AI Studio preview environment
@@ -2190,6 +2190,21 @@ function startTelegramBot() {
     if (telegramPollTimeout) {
       clearTimeout(telegramPollTimeout);
     }
+
+    // Auto-delete webhook to avoid 409 Conflict if webhooks were used previously
+    try {
+      addLog('info', 'Deleting any active Telegram webhooks to ensure long-polling is available...', 'bot');
+      const delRes = await fetch(`${TELEGRAM_API_BASE}/bot${token}/deleteWebhook?drop_pending_updates=true`);
+      if (delRes.ok) {
+        addLog('success', 'Active webhooks successfully cleared from Telegram.', 'bot');
+      } else {
+        const delText = await delRes.text();
+        addLog('warning', `deleteWebhook returned status ${delRes.status}: ${delText}`, 'bot');
+      }
+    } catch (whErr) {
+      addLog('warning', `Failed to delete webhook: ${whErr instanceof Error ? whErr.message : String(whErr)}`, 'bot');
+    }
+
     // Register commands in Telegram client menu dynamically
     registerBotCommands(token);
     runTelegramPolling();
